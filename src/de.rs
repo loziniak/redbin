@@ -6,6 +6,10 @@ use serde::de::{
 use std::ops::{AddAssign, MulAssign, Neg};
 use std::convert::TryInto;
 
+mod types {
+    pub const INTEGER: u8 = 0x0B;
+}
+
 pub struct Deserializer<'de> {
     input: &'de [u8],
 }
@@ -54,10 +58,14 @@ impl<'de> Deserializer<'de> {
     }
     
     fn parse_integer(&mut self) -> Result<i32> {
-        let i = &self.input[4..8];
-        println!("i: {:?}", i);
-        self.input = &self.input[8..];
-        Ok(i32::from_le_bytes(i.try_into().unwrap()))
+        if &self.input[..4] == &[types::INTEGER, 0x00, 0x00, 0x00] {
+            let i = &self.input[4..8];
+            println!("i: {:?}", i);
+            self.input = &self.input[8..];
+            Ok(i32::from_le_bytes(i.try_into().unwrap()))
+        } else {
+            Err(Error::ExpectedInteger)
+        }
     }
 
     fn parse_bool(&mut self) -> Result<bool> {
@@ -107,14 +115,26 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut Deserializer<'de> {
     where
         V: Visitor<'de>,
     {
-        unimplemented!("TODO");
+        let v = self.parse_integer()?;
+        if v > (i8::MAX as i32)
+                || v < (i8::MIN as i32) {
+            Err(Error::Message(String::from("i8 limit exceeded")))
+        } else {
+            visitor.visit_i8(v as i8)
+        }
     }
 
     fn deserialize_i16<V>(self, visitor: V) -> Result<V::Value>
     where
         V: Visitor<'de>,
     {
-        unimplemented!("TODO");
+        let v = self.parse_integer()?;
+        if v > (i16::MAX as i32)
+                || v < (i16::MIN as i32) {
+            Err(Error::Message(String::from("i16 limit exceeded")))
+        } else {
+            visitor.visit_i16(v as i16)
+        }
     }
 
     fn deserialize_i32<V>(self, visitor: V) -> Result<V::Value>
@@ -128,35 +148,57 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut Deserializer<'de> {
     where
         V: Visitor<'de>,
     {
-        unimplemented!("TODO");
+        visitor.visit_i64(self.parse_integer()? as i64)
     }
 
     fn deserialize_u8<V>(self, visitor: V) -> Result<V::Value>
     where
         V: Visitor<'de>,
     {
-        unimplemented!("TODO");
+        let v = self.parse_integer()?;
+        if v > (u8::MAX as i32)
+                || v < (u8::MIN as i32) {
+            Err(Error::Message(String::from("u8 limit exceeded")))
+        } else {
+            visitor.visit_u8(v as u8)
+        }
     }
 
     fn deserialize_u16<V>(self, visitor: V) -> Result<V::Value>
     where
         V: Visitor<'de>,
     {
-        unimplemented!("TODO");
+        let v = self.parse_integer()?;
+        if v > (u16::MAX as i32)
+                || v < (u16::MIN as i32) {
+            Err(Error::Message(String::from("u16 limit exceeded")))
+        } else {
+            visitor.visit_u16(v as u16)
+        }
     }
 
     fn deserialize_u32<V>(self, visitor: V) -> Result<V::Value>
     where
         V: Visitor<'de>,
     {
-        unimplemented!("TODO");
+        let v = self.parse_integer()?;
+        if v < (u32::MIN as i32) {
+            Err(Error::Message(String::from("u32 limit exceeded")))
+        } else {
+            visitor.visit_u32(v as u32)
+        }
     }
 
     fn deserialize_u64<V>(self, visitor: V) -> Result<V::Value>
     where
         V: Visitor<'de>,
     {
-        unimplemented!("TODO");
+        let v = self.parse_integer()?;
+        if v < (u64::MIN as i32) {
+            Err(Error::Message(String::from("u64 limit exceeded")))
+        } else {
+            visitor.visit_u64(v as u64)
+        }
     }
 
     fn deserialize_f32<V>(self, _visitor: V) -> Result<V::Value>
@@ -486,7 +528,7 @@ mod tests {
 
             0x0B, 0x00, 0x00, 0x00,  // header, integer! type = 11 (0x0B)
             0x05, 0x00, 0x00, 0x00]; // value, little endian.
-        let expected: i32 = 5;
+        let expected: i16 = 5;
         assert_eq!(expected, from_bytes(j).unwrap());
     }
 /*

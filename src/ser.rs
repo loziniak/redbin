@@ -44,11 +44,11 @@ impl<'a> ser::Serializer for &'a mut Serializer {
     }
 
     fn serialize_i8(self, v: i8) -> Result<()> {
-        unimplemented!("TODO");
+        self.serialize_i32(v as i32)
     }
 
     fn serialize_i16(self, v: i16) -> Result<()> {
-        unimplemented!("TODO");
+        self.serialize_i32(v as i32)
     }
 
     fn serialize_i32(self, v: i32) -> Result<()> {
@@ -59,23 +59,32 @@ impl<'a> ser::Serializer for &'a mut Serializer {
     }
 
     fn serialize_i64(self, v: i64) -> Result<()> {
-        unimplemented!("TODO");
+        if v > (i32::MAX as i64)
+                || v < (i32::MIN as i64) {
+            Err(Error::Message(String::from("32-bit integer! limit exceeded")))
+        } else {
+            self.serialize_i32(v as i32)
+        }
     }
 
     fn serialize_u8(self, v: u8) -> Result<()> {
-        unimplemented!("TODO");
+        self.serialize_i32(v as i32)
     }
 
     fn serialize_u16(self, v: u16) -> Result<()> {
-        unimplemented!("TODO");
+        self.serialize_i32(v as i32)
     }
 
     fn serialize_u32(self, v: u32) -> Result<()> {
-        unimplemented!("TODO");
+        self.serialize_u64(v as u64)
     }
 
     fn serialize_u64(self, v: u64) -> Result<()> {
-        unimplemented!("TODO");
+        if v > (i32::MAX as u64) {
+            Err(Error::Message(String::from("32-bit integer! limit exceeded")))
+        } else {
+            self.serialize_i32(v as i32)
+        }
     }
 
     fn serialize_f32(self, v: f32) -> Result<()> {
@@ -327,7 +336,7 @@ mod tests {
     
     #[test]
     fn test_int() {
-        let i = 5;
+        let i = 5_u8;
         let expected = vec![0x52, 0x45, 0x44, 0x42, 0x49, 0x4E, // "REDBIN"
             0x02, // version
             0x00, // flags
