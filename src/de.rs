@@ -1,22 +1,15 @@
-// Copyright 2018 Serde Developers
-//
-// Licensed under the Apache License, Version 2.0 <LICENSE-APACHE or
-// http://www.apache.org/licenses/LICENSE-2.0> or the MIT license
-// <LICENSE-MIT or http://opensource.org/licenses/MIT>, at your
-// option. This file may not be copied, modified, or distributed
-// except according to those terms.
-
 use crate::error::{Error, Result};
 use serde::de::{
     self, Deserialize, DeserializeSeed, EnumAccess, IntoDeserializer,
     MapAccess, SeqAccess, VariantAccess, Visitor,
 };
 use std::ops::{AddAssign, MulAssign, Neg};
+use std::convert::TryInto;
 
 pub struct Deserializer<'de> {
     // This string starts with the input data and characters are truncated off
     // the beginning as data is parsed.
-    input: &'de str,
+    input: &'de [u8],
 }
 
 impl<'de> Deserializer<'de> {
@@ -25,7 +18,7 @@ impl<'de> Deserializer<'de> {
     // `serde_json::from_str(...)` while advanced use cases that require a
     // deserializer can make one with `serde_json::Deserializer::from_str(...)`.
     #[allow(clippy::should_implement_trait)]
-    pub fn from_str(input: &'de str) -> Self {
+    pub fn from_bytes(input: &'de [u8]) -> Self {
         Deserializer { input }
     }
 }
@@ -35,16 +28,17 @@ impl<'de> Deserializer<'de> {
 // depending on what Rust types the deserializer is able to consume as input.
 //
 // This basic deserializer supports only `from_str`.
-pub fn from_str<'a, T>(s: &'a str) -> Result<T>
+pub fn from_bytes<'a, T>(s: &'a [u8]) -> Result<T>
 where
     T: Deserialize<'a>,
 {
-    let mut deserializer = Deserializer::from_str(s);
+    let mut deserializer = Deserializer::from_bytes(s);
+    deserializer.parse_header();
     let t = T::deserialize(&mut deserializer)?;
     if deserializer.input.is_empty() {
         Ok(t)
     } else {
-        Err(Error::TrailingCharacters)
+        Err(Error::TrailingBytes)
     }
 }
 
@@ -54,27 +48,48 @@ where
 impl<'de> Deserializer<'de> {
     // Look at the first character in the input without consuming it.
     fn peek_char(&mut self) -> Result<char> {
-        self.input.chars().next().ok_or(Error::Eof)
+        unimplemented!("TODO");
+        //self.input.chars().next().ok_or(Error::Eof)
     }
 
     // Consume the first character in the input.
     fn next_char(&mut self) -> Result<char> {
-        let ch = self.peek_char()?;
-        self.input = &self.input[ch.len_utf8()..];
-        Ok(ch)
+        unimplemented!("TODO");
+        //let ch = self.peek_char()?;
+        //self.input = &self.input[ch.len_utf8()..];
+        //Ok(ch)
+    }
+    
+    fn parse_header(&mut self) -> Result<()> {
+        let header_len = [0x52, 0x45, 0x44, 0x42, 0x49, 0x4E, // "REDBIN"
+            0x02, // version
+            0x00, // flags
+            0x01, 0x00, 0x00, 0x00,  // length (number of records)
+            0x08, 0x00, 0x00, 0x00]  // size of payload
+            .len();
+        self.input = &self.input[header_len..];
+        Ok(())
+    }
+    
+    fn parse_integer(&mut self) -> Result<i32> {
+        let i = &self.input[4..8];
+        println!("i: {:?}", i);
+        self.input = &self.input[8..];
+        Ok(i32::from_le_bytes(i.try_into().unwrap()))
     }
 
     // Parse the JSON identifier `true` or `false`.
     fn parse_bool(&mut self) -> Result<bool> {
-        if self.input.starts_with("true") {
-            self.input = &self.input["true".len()..];
-            Ok(true)
-        } else if self.input.starts_with("false") {
-            self.input = &self.input["false".len()..];
-            Ok(false)
-        } else {
-            Err(Error::ExpectedBoolean)
-        }
+        unimplemented!("TODO");
+        //if self.input.starts_with("true") {
+            //self.input = &self.input["true".len()..];
+            //Ok(true)
+        //} else if self.input.starts_with("false") {
+            //self.input = &self.input["false".len()..];
+            //Ok(false)
+        //} else {
+            //Err(Error::ExpectedBoolean)
+        //}
     }
 
     // Parse a group of decimal digits as an unsigned integer of type T.
@@ -86,34 +101,36 @@ impl<'de> Deserializer<'de> {
     where
         T: AddAssign<T> + MulAssign<T> + From<u8>,
     {
-        let mut int = match self.next_char()? {
-            ch @ '0'..='9' => T::from(ch as u8 - b'0'),
-            _ => {
-                return Err(Error::ExpectedInteger);
-            }
-        };
-        loop {
-            match self.input.chars().next() {
-                Some(ch @ '0'..='9') => {
-                    self.input = &self.input[1..];
-                    int *= T::from(10);
-                    int += T::from(ch as u8 - b'0');
-                }
-                _ => {
-                    return Ok(int);
-                }
-            }
-        }
+        unimplemented!("TODO");
+        //let mut int = match self.next_char()? {
+            //ch @ '0'..='9' => T::from(ch as u8 - b'0'),
+            //_ => {
+                //return Err(Error::ExpectedInteger);
+            //}
+        //};
+        //loop {
+            //match self.input.chars().next() {
+                //Some(ch @ '0'..='9') => {
+                    //self.input = &self.input[1..];
+                    //int *= T::from(10);
+                    //int += T::from(ch as u8 - b'0');
+                //}
+                //_ => {
+                    //return Ok(int);
+                //}
+            //}
+        //}
     }
-
+    
     // Parse a possible minus sign followed by a group of decimal digits as a
     // signed integer of type T.
     fn parse_signed<T>(&mut self) -> Result<T>
     where
         T: Neg<Output = T> + AddAssign<T> + MulAssign<T> + From<i8>,
     {
+        unimplemented!("TODO");
         // Optional minus sign, delegate to `parse_unsigned`, negate if negative.
-        unimplemented!()
+        //unimplemented!()
     }
 
     // Parse a string until the next '"' character.
@@ -121,17 +138,18 @@ impl<'de> Deserializer<'de> {
     // Makes no attempt to handle escape sequences. What did you expect? This is
     // example code!
     fn parse_string(&mut self) -> Result<&'de str> {
-        if self.next_char()? != '"' {
-            return Err(Error::ExpectedString);
-        }
-        match self.input.find('"') {
-            Some(len) => {
-                let s = &self.input[..len];
-                self.input = &self.input[len + 1..];
-                Ok(s)
-            }
-            None => Err(Error::Eof),
-        }
+        unimplemented!("TODO");
+        //if self.next_char()? != '"' {
+            //return Err(Error::ExpectedString);
+        //}
+        //match self.input.find('"') {
+            //Some(len) => {
+                //let s = &self.input[..len];
+                //self.input = &self.input[len + 1..];
+                //Ok(s)
+            //}
+            //None => Err(Error::Eof),
+        //}
     }
 }
 
@@ -175,7 +193,7 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut Deserializer<'de> {
     where
         V: Visitor<'de>,
     {
-        visitor.visit_bool(self.parse_bool()?)
+        unimplemented!("TODO");
     }
 
     // The `parse_signed` function is generic over the integer type `T` so here
@@ -184,56 +202,56 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut Deserializer<'de> {
     where
         V: Visitor<'de>,
     {
-        visitor.visit_i8(self.parse_signed()?)
+        unimplemented!("TODO");
     }
 
     fn deserialize_i16<V>(self, visitor: V) -> Result<V::Value>
     where
         V: Visitor<'de>,
     {
-        visitor.visit_i16(self.parse_signed()?)
+        unimplemented!("TODO");
     }
 
     fn deserialize_i32<V>(self, visitor: V) -> Result<V::Value>
     where
         V: Visitor<'de>,
     {
-        visitor.visit_i32(self.parse_signed()?)
+        visitor.visit_i32(self.parse_integer()?)
     }
 
     fn deserialize_i64<V>(self, visitor: V) -> Result<V::Value>
     where
         V: Visitor<'de>,
     {
-        visitor.visit_i64(self.parse_signed()?)
+        unimplemented!("TODO");
     }
 
     fn deserialize_u8<V>(self, visitor: V) -> Result<V::Value>
     where
         V: Visitor<'de>,
     {
-        visitor.visit_u8(self.parse_unsigned()?)
+        unimplemented!("TODO");
     }
 
     fn deserialize_u16<V>(self, visitor: V) -> Result<V::Value>
     where
         V: Visitor<'de>,
     {
-        visitor.visit_u16(self.parse_unsigned()?)
+        unimplemented!("TODO");
     }
 
     fn deserialize_u32<V>(self, visitor: V) -> Result<V::Value>
     where
         V: Visitor<'de>,
     {
-        visitor.visit_u32(self.parse_unsigned()?)
+        unimplemented!("TODO");
     }
 
     fn deserialize_u64<V>(self, visitor: V) -> Result<V::Value>
     where
         V: Visitor<'de>,
     {
-        visitor.visit_u64(self.parse_unsigned()?)
+        unimplemented!("TODO");
     }
 
     // Float parsing is stupidly hard.
@@ -241,7 +259,7 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut Deserializer<'de> {
     where
         V: Visitor<'de>,
     {
-        unimplemented!()
+        unimplemented!("TODO");
     }
 
     // Float parsing is stupidly hard.
@@ -249,7 +267,7 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut Deserializer<'de> {
     where
         V: Visitor<'de>,
     {
-        unimplemented!()
+        unimplemented!("TODO");
     }
 
     // The `Serializer` implementation on the previous page serialized chars as
@@ -258,8 +276,7 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut Deserializer<'de> {
     where
         V: Visitor<'de>,
     {
-        // Parse a string, check that it is one character, call `visit_char`.
-        unimplemented!()
+        unimplemented!("TODO");
     }
 
     // Refer to the "Understanding deserializer lifetimes" page for information
@@ -268,14 +285,14 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut Deserializer<'de> {
     where
         V: Visitor<'de>,
     {
-        visitor.visit_borrowed_str(self.parse_string()?)
+        unimplemented!("TODO");
     }
 
     fn deserialize_string<V>(self, visitor: V) -> Result<V::Value>
     where
         V: Visitor<'de>,
     {
-        self.deserialize_str(visitor)
+        unimplemented!("TODO");
     }
 
     // The `Serializer` implementation on the previous page serialized byte
@@ -284,14 +301,14 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut Deserializer<'de> {
     where
         V: Visitor<'de>,
     {
-        unimplemented!()
+        unimplemented!("TODO");
     }
 
     fn deserialize_byte_buf<V>(self, _visitor: V) -> Result<V::Value>
     where
         V: Visitor<'de>,
     {
-        unimplemented!()
+        unimplemented!("TODO");
     }
 
     // An absent optional is represented as the JSON `null` and a present
@@ -306,12 +323,7 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut Deserializer<'de> {
     where
         V: Visitor<'de>,
     {
-        if self.input.starts_with("null") {
-            self.input = &self.input["null".len()..];
-            visitor.visit_none()
-        } else {
-            visitor.visit_some(self)
-        }
+        unimplemented!("TODO");
     }
 
     // In Serde, unit means an anonymous value containing no data.
@@ -319,12 +331,7 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut Deserializer<'de> {
     where
         V: Visitor<'de>,
     {
-        if self.input.starts_with("null") {
-            self.input = &self.input["null".len()..];
-            visitor.visit_unit()
-        } else {
-            Err(Error::ExpectedNull)
-        }
+        unimplemented!("TODO");
     }
 
     // Unit struct means a named value containing no data.
@@ -336,7 +343,7 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut Deserializer<'de> {
     where
         V: Visitor<'de>,
     {
-        self.deserialize_unit(visitor)
+        unimplemented!("TODO");
     }
 
     // As is done here, serializers are encouraged to treat newtype structs as
@@ -350,7 +357,7 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut Deserializer<'de> {
     where
         V: Visitor<'de>,
     {
-        visitor.visit_newtype_struct(self)
+        unimplemented!("TODO");
     }
 
     // Deserialization of compound types like sequences and maps happens by
@@ -360,19 +367,7 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut Deserializer<'de> {
     where
         V: Visitor<'de>,
     {
-        // Parse the opening bracket of the sequence.
-        if self.next_char()? == '[' {
-            // Give the visitor access to each element of the sequence.
-            let value = visitor.visit_seq(CommaSeparated::new(self))?;
-            // Parse the closing bracket of the sequence.
-            if self.next_char()? == ']' {
-                Ok(value)
-            } else {
-                Err(Error::ExpectedArrayEnd)
-            }
-        } else {
-            Err(Error::ExpectedArray)
-        }
+        unimplemented!("TODO");
     }
 
     // Tuples look just like sequences in JSON. Some formats may be able to
@@ -385,7 +380,7 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut Deserializer<'de> {
     where
         V: Visitor<'de>,
     {
-        self.deserialize_seq(visitor)
+        unimplemented!("TODO");
     }
 
     // Tuple structs look just like sequences in JSON.
@@ -398,7 +393,7 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut Deserializer<'de> {
     where
         V: Visitor<'de>,
     {
-        self.deserialize_seq(visitor)
+        unimplemented!("TODO");
     }
 
     // Much like `deserialize_seq` but calls the visitors `visit_map` method
@@ -408,19 +403,7 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut Deserializer<'de> {
     where
         V: Visitor<'de>,
     {
-        // Parse the opening brace of the map.
-        if self.next_char()? == '{' {
-            // Give the visitor access to each entry of the map.
-            let value = visitor.visit_map(CommaSeparated::new(self))?;
-            // Parse the closing brace of the map.
-            if self.next_char()? == '}' {
-                Ok(value)
-            } else {
-                Err(Error::ExpectedMapEnd)
-            }
-        } else {
-            Err(Error::ExpectedMap)
-        }
+        unimplemented!("TODO");
     }
 
     // Structs look just like maps in JSON.
@@ -438,7 +421,7 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut Deserializer<'de> {
     where
         V: Visitor<'de>,
     {
-        self.deserialize_map(visitor)
+        unimplemented!("TODO");
     }
 
     fn deserialize_enum<V>(
@@ -450,21 +433,7 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut Deserializer<'de> {
     where
         V: Visitor<'de>,
     {
-        if self.peek_char()? == '"' {
-            // Visit a unit variant.
-            visitor.visit_enum(self.parse_string()?.into_deserializer())
-        } else if self.next_char()? == '{' {
-            // Visit a newtype variant, tuple variant, or struct variant.
-            let value = visitor.visit_enum(Enum::new(self))?;
-            // Parse the matching close brace.
-            if self.next_char()? == '}' {
-                Ok(value)
-            } else {
-                Err(Error::ExpectedMapEnd)
-            }
-        } else {
-            Err(Error::ExpectedEnum)
-        }
+        unimplemented!("TODO");
     }
 
     // An identifier in Serde is the type that identifies a field of a struct or
@@ -475,7 +444,7 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut Deserializer<'de> {
     where
         V: Visitor<'de>,
     {
-        self.deserialize_str(visitor)
+        unimplemented!("TODO");
     }
 
     // Like `deserialize_any` but indicates to the `Deserializer` that it makes
@@ -493,7 +462,7 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut Deserializer<'de> {
     where
         V: Visitor<'de>,
     {
-        self.deserialize_any(visitor)
+        unimplemented!("TODO");
     }
 }
 
@@ -654,9 +623,23 @@ impl<'de, 'a> VariantAccess<'de> for Enum<'a, 'de> {
 
 #[cfg(test)]
 mod tests {
-    use super::from_str;
+    use super::from_bytes;
     use serde_derive::Deserialize;
+    
+    #[test]
+    fn test_int() {
+        let j = &[0x52, 0x45, 0x44, 0x42, 0x49, 0x4E, // "REDBIN"
+            0x02, // version
+            0x00, // flags
+            0x01, 0x00, 0x00, 0x00,  // length (number of records)
+            0x08, 0x00, 0x00, 0x00,  // size of payload
 
+            0x0B, 0x00, 0x00, 0x00,  // header, integer! type = 11 (0x0B)
+            0x05, 0x00, 0x00, 0x00]; // value, little endian.
+        let expected: i32 = 5;
+        assert_eq!(expected, from_bytes(j).unwrap());
+    }
+/*
     #[test]
     fn test_struct() {
         #[derive(Deserialize, PartialEq, Debug)]
@@ -699,4 +682,5 @@ mod tests {
         let expected = E::Struct { a: 1 };
         assert_eq!(expected, from_str(j).unwrap());
     }
+*/
 }

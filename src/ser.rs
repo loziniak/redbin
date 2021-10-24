@@ -28,7 +28,7 @@ where
         output: Vec::new(),
     };
     value.serialize(&mut serializer)?;
-    header.append(&mut Vec::from((serializer.output.len() as i32).to_le_bytes()));
+    header.append(&mut Vec::from((serializer.output.len() as i32).to_le_bytes())); // size of payload
     Ok([&header[..], &serializer.output[..]].concat())
 }
 

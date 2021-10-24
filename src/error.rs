@@ -41,7 +41,7 @@ pub enum Error {
     ExpectedMapComma,
     ExpectedMapEnd,
     ExpectedEnum,
-    TrailingCharacters,
+    TrailingBytes,
 }
 
 impl ser::Error for Error {
