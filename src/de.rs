@@ -1,3 +1,7 @@
+#![allow(unused_imports)]
+#![allow(unused_variables)]
+#![allow(dead_code)]
+
 use crate::error::{Error, Result};
 use serde::de::{
     self, Deserialize, DeserializeSeed, EnumAccess, IntoDeserializer,
@@ -8,6 +12,7 @@ use std::convert::TryInto;
 
 mod types {
     pub const INTEGER: u8 = 0x0B;
+    pub const BLOCK: u8 = 0x05;
 }
 
 pub struct Deserializer<'de> {
@@ -26,7 +31,7 @@ where
     T: Deserialize<'a>,
 {
     let mut deserializer = Deserializer::from_bytes(s);
-    deserializer.parse_header();
+    deserializer.parse_header()?;
     let t = T::deserialize(&mut deserializer)?;
     if deserializer.input.is_empty() {
         Ok(t)
@@ -60,11 +65,22 @@ impl<'de> Deserializer<'de> {
     fn parse_integer(&mut self) -> Result<i32> {
         if &self.input[..4] == &[types::INTEGER, 0x00, 0x00, 0x00] {
             let i = &self.input[4..8];
-            println!("i: {:?}", i);
+            //println!("i: {:?}", i); // DEBUG
             self.input = &self.input[8..];
             Ok(i32::from_le_bytes(i.try_into().unwrap()))
         } else {
             Err(Error::ExpectedInteger)
+        }
+    }
+    
+    fn parse_block_header(&mut self) -> Result<i32> {
+        if &self.input[..4] == &[types::BLOCK, 0x00, 0x00, 0x00] {
+            let len = &self.input[8..12];
+            //println!("len: {:?}", len); // DEBUG
+            self.input = &self.input[12..];
+            Ok(i32::from_le_bytes(len.try_into().unwrap()))
+        } else {
+            Err(Error::ExpectedBlock)
         }
     }
 
@@ -290,7 +306,9 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut Deserializer<'de> {
     where
         V: Visitor<'de>,
     {
-        unimplemented!("TODO");
+        let len = self.parse_block_header()?;
+        let value = visitor.visit_seq(CommaSeparated::new(self, len))?;
+        Ok(value)
     }
 
     fn deserialize_tuple<V>(self, _len: usize, visitor: V) -> Result<V::Value>
@@ -364,11 +382,12 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut Deserializer<'de> {
 struct CommaSeparated<'a, 'de: 'a> {
     de: &'a mut Deserializer<'de>,
     first: bool,
+    elements: i32,
 }
 
 impl<'a, 'de> CommaSeparated<'a, 'de> {
-    fn new(de: &'a mut Deserializer<'de>) -> Self {
-        CommaSeparated { de, first: true }
+    fn new(de: &'a mut Deserializer<'de>, len: i32) -> Self {
+        CommaSeparated { de, first: true, elements: len }
     }
 }
 
@@ -381,17 +400,18 @@ impl<'de, 'a> SeqAccess<'de> for CommaSeparated<'a, 'de> {
     where
         T: DeserializeSeed<'de>,
     {
-        // Check if there are no more elements.
-        if self.de.peek_char()? == ']' {
+        if self.elements <= 0 {
             return Ok(None);
         }
-        // Comma is required before every element except the first.
-        if !self.first && self.de.next_char()? != ',' {
-            return Err(Error::ExpectedArrayComma);
-        }
-        self.first = false;
         // Deserialize an array element.
-        seed.deserialize(&mut *self.de).map(Some)
+        let v = seed.deserialize(&mut *self.de).map(Some)?;
+        self.first = false;
+        self.elements -= 1;
+        Ok(v)
+    }
+    
+    fn size_hint(&self) -> Option<usize> {
+        Some(self.elements as usize)
     }
 }
 
@@ -519,60 +539,31 @@ mod tests {
     use serde_derive::Deserialize;
     
     #[test]
-    fn test_int() {
+    fn test_seq() {
         let j = &[0x52, 0x45, 0x44, 0x42, 0x49, 0x4E, // "REDBIN"
             0x02, // version
             0x00, // flags
-            0x01, 0x00, 0x00, 0x00,  // length (number of records)
-            0x08, 0x00, 0x00, 0x00,  // size of payload
-
-            0x0B, 0x00, 0x00, 0x00,  // header, integer! type = 11 (0x0B)
-            0x05, 0x00, 0x00, 0x00]; // value, little endian.
-        let expected: i16 = 5;
-        assert_eq!(expected, from_bytes(j).unwrap());
-    }
-/*
-    #[test]
-    fn test_struct() {
-        #[derive(Deserialize, PartialEq, Debug)]
-        struct Test {
-            int: u32,
-            seq: Vec<String>,
-        }
-
-        let j = r#"{"int":1,"seq":["a","b"]}"#;
-        let expected = Test {
-            int: 1,
-            seq: vec!["a".to_owned(), "b".to_owned()],
-        };
-        assert_eq!(expected, from_str(j).unwrap());
+            0x01, 0x00, 0x00, 0x00, // length (number of records)
+            0x24, 0x00, 0x00, 0x00, // size of payload
+            
+            0x05, 0x00, 0x00, 0x00, // header, block! type = 5
+            0x00, 0x00, 0x00, 0x00, // block's index (0 = head)
+            0x03, 0x00, 0x00, 0x00, // elements
+            
+            // element data
+                // value 1
+                0x0B, 0x00, 0x00, 0x00, // header, integer! type = 11 (0x0B)
+                0x05, 0x00, 0x00, 0x00, // value, little endian
+                
+                //value 2
+                0x0B, 0x00, 0x00, 0x00, // header, integer! type = 11 (0x0B)
+                0x06, 0x00, 0x00, 0x00, // value, little endian
+                
+                //value 3
+                0x0B, 0x00, 0x00, 0x00, // header, integer! type = 11 (0x0B)
+                0x07, 0x00, 0x00, 0x00]; // value, little endian
+        let expected: Vec<i16> = vec![5, 6, 7];
+        assert_eq!(expected, from_bytes::<Vec<i16>>(j).unwrap());
     }
 
-    #[test]
-    fn test_enum() {
-        #[derive(Deserialize, PartialEq, Debug)]
-        enum E {
-            Unit,
-            Newtype(u32),
-            Tuple(u32, u32),
-            Struct { a: u32 },
-        }
-
-        let j = r#""Unit""#;
-        let expected = E::Unit;
-        assert_eq!(expected, from_str(j).unwrap());
-
-        let j = r#"{"Newtype":1}"#;
-        let expected = E::Newtype(1);
-        assert_eq!(expected, from_str(j).unwrap());
-
-        let j = r#"{"Tuple":[1,2]}"#;
-        let expected = E::Tuple(1, 2);
-        assert_eq!(expected, from_str(j).unwrap());
-
-        let j = r#"{"Struct":{"a":1}}"#;
-        let expected = E::Struct { a: 1 };
-        assert_eq!(expected, from_str(j).unwrap());
-    }
-*/
 }

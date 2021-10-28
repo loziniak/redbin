@@ -31,10 +31,10 @@ pub enum Error {
     Syntax,
     ExpectedBoolean,
     ExpectedInteger,
+    ExpectedBlock,
     ExpectedString,
     ExpectedNull,
     ExpectedArray,
-    ExpectedArrayComma,
     ExpectedArrayEnd,
     ExpectedMap,
     ExpectedMapColon,
@@ -42,6 +42,7 @@ pub enum Error {
     ExpectedMapEnd,
     ExpectedEnum,
     TrailingBytes,
+    SizeMismatch
 }
 
 impl ser::Error for Error {

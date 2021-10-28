@@ -1,12 +1,27 @@
+#![allow(unused_imports)]
+#![allow(unused_variables)]
+#![allow(dead_code)]
+
 use crate::error::{Error, Result};
 use serde::ser::{self, Serialize};
 
 mod types {
     pub const INTEGER: i32 = 11_i32;
+    pub const BLOCK: i32 = 5_i32;
 }
 
 pub struct Serializer {
     output: Vec<u8>,
+    length: i32,
+}
+
+impl Serializer {
+    pub fn new() -> Self {
+        Serializer {
+            output: Vec::new(),
+            length: 0,
+        }
+    }
 }
 
 pub fn to_bytes<T>(value: &T) -> Result<Vec<u8>>
@@ -18,9 +33,7 @@ where
             0x00, // flags
             0x01, 0x00, 0x00, 0x00]); // length (number of records))
 
-    let mut serializer = Serializer {
-        output: Vec::new(),
-    };
+    let mut serializer = Serializer::new();
     value.serialize(&mut serializer)?;
     header.append(&mut Vec::from((serializer.output.len() as i32).to_le_bytes())); // size of payload
     Ok([&header[..], &serializer.output[..]].concat())
@@ -54,7 +67,7 @@ impl<'a> ser::Serializer for &'a mut Serializer {
     fn serialize_i32(self, v: i32) -> Result<()> {
         self.output.append(&mut Vec::from(types::INTEGER.to_le_bytes()));
         self.output.append(&mut Vec::from(v.to_le_bytes()));
-        println!("i32: {:?}", v.to_le_bytes());
+        //println!("i32: {:?}", v.to_le_bytes()); // DEBUG
         Ok(())
     }
 
@@ -160,7 +173,7 @@ impl<'a> ser::Serializer for &'a mut Serializer {
     }
 
     fn serialize_seq(self, _len: Option<usize>) -> Result<Self::SerializeSeq> {
-        unimplemented!("TODO");
+        Ok(self)
     }
 
     fn serialize_tuple(self, len: usize) -> Result<Self::SerializeTuple> {
@@ -216,11 +229,23 @@ impl<'a> ser::SerializeSeq for &'a mut Serializer {
     where
         T: ?Sized + Serialize,
     {
-        unimplemented!("TODO");
+        let mut serializer = Serializer::new();
+        value.serialize(&mut serializer)?;
+        self.output.append(&mut serializer.output);
+        self.length += 1;
+        Ok(())
     }
 
     fn end(self) -> Result<()> {
-        unimplemented!("TODO");
+        let mut header = Vec::new();
+        
+        header.append(&mut Vec::from(types::BLOCK.to_le_bytes()));
+        header.append(&mut Vec::from([0x00, 0x00, 0x00, 0x00])); // position block on start
+        header.append(&mut Vec::from(self.length.to_le_bytes()));
+
+        //self.output.append(&mut Vec::from(_len.unwrap_or(0).to_le_bytes()));
+        self.output.splice(0..0, header);
+        Ok(())
     }
 }
 
@@ -329,67 +354,46 @@ impl<'a> ser::SerializeStructVariant for &'a mut Serializer {
 
 ////////////////////////////////////////////////////////////////////////////////
 
+/*
+Redbin values can be generated in Red:
+
+>> rust-redbin-helper: function [value] [buf: copy #{}  save/as buf value 'redbin  foreach b buf [prin rejoin [", 0x"   copy/part  at mold to binary! b 9  2]]  print ""]
+== func [value /local buf b][buf: copy #{} save/as buf value 'redbin foreach b buf [prin re...
+>> rust-redbin-helper 55
+, 0x52, 0x45, 0x44, 0x42, 0x49, 0x4E, 0x02, 0x00, 0x01, 0x00, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00, 0x0B, 0x00, 0x00, 0x00, 0x37, 0x00, 0x00, 0x00
+*/
+
 #[cfg(test)]
 mod tests {
     use super::to_bytes;
     use serde_derive::Serialize;
     
     #[test]
-    fn test_int() {
-        let i = 5_u8;
-        let expected = vec![0x52, 0x45, 0x44, 0x42, 0x49, 0x4E, // "REDBIN"
+    fn test_seq() {
+        let i: &[u8] = &[5, 6, 7];
+        let expected = &[0x52, 0x45, 0x44, 0x42, 0x49, 0x4E, // "REDBIN"
             0x02, // version
             0x00, // flags
-            0x01, 0x00, 0x00, 0x00,  // length (number of records)
-            0x08, 0x00, 0x00, 0x00,  // size of payload
-
-            0x0B, 0x00, 0x00, 0x00,  // header, integer! type = 11 (0x0B)
-            0x05, 0x00, 0x00, 0x00]; // value, little endian.
+            0x01, 0x00, 0x00, 0x00, // length (number of records)
+            0x24, 0x00, 0x00, 0x00, // size of payload
+            
+            0x05, 0x00, 0x00, 0x00, // header, block! type = 5
+            0x00, 0x00, 0x00, 0x00, // block's index (0 = head)
+            0x03, 0x00, 0x00, 0x00, // elements
+            
+            // element data
+                // value 1
+                0x0B, 0x00, 0x00, 0x00, // header, integer! type = 11 (0x0B)
+                0x05, 0x00, 0x00, 0x00, // value, little endian
+                
+                //value 2
+                0x0B, 0x00, 0x00, 0x00, // header, integer! type = 11 (0x0B)
+                0x06, 0x00, 0x00, 0x00, // value, little endian
+                
+                //value 3
+                0x0B, 0x00, 0x00, 0x00, // header, integer! type = 11 (0x0B)
+                0x07, 0x00, 0x00, 0x00]; // value, little endian
         assert_eq!(to_bytes(&i).unwrap(), expected);
     }
 
-/*
-    #[test]
-    fn test_struct() {
-        #[derive(Serialize)]
-        struct Test {
-            int: u32,
-            seq: Vec<&'static str>,
-        }
-
-        let test = Test {
-            int: 1,
-            seq: vec!["a", "b"],
-        };
-        let expected = r#"{"int":1,"seq":["a","b"]}"#;
-        assert_eq!(to_string(&test).unwrap(), expected);
-    }
-
-    #[test]
-    fn test_enum() {
-        #[derive(Serialize)]
-        enum E {
-            Unit,
-            Newtype(u32),
-            Tuple(u32, u32),
-            Struct { a: u32 },
-        }
-
-        let u = E::Unit;
-        let expected = r#""Unit""#;
-        assert_eq!(to_string(&u).unwrap(), expected);
-
-        let n = E::Newtype(1);
-        let expected = r#"{"Newtype":1}"#;
-        assert_eq!(to_string(&n).unwrap(), expected);
-
-        let t = E::Tuple(1, 2);
-        let expected = r#"{"Tuple":[1,2]}"#;
-        assert_eq!(to_string(&t).unwrap(), expected);
-
-        let s = E::Struct { a: 1 };
-        let expected = r#"{"Struct":{"a":1}}"#;
-        assert_eq!(to_string(&s).unwrap(), expected);
-    }
-*/
 }
