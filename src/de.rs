@@ -11,9 +11,10 @@ use std::ops::{AddAssign, MulAssign, Neg};
 use std::convert::TryInto;
 
 mod types {
-    pub const INTEGER: u8 = 0x0B;
-    pub const BLOCK: u8 = 0x05;
     pub const LOGIC: u8 = 0x04;
+    pub const BLOCK: u8 = 0x05;
+    pub const INTEGER: u8 = 0x0B;
+    pub const FLOAT: u8 = 0x0C;
 }
 
 pub struct Deserializer<'de> {
@@ -45,11 +46,11 @@ where
 impl<'de> Deserializer<'de> {
 
     fn peek_char(&mut self) -> Result<char> {
-        unimplemented!("TODO");
+        unimplemented!("TODO: remove");
     }
 
     fn next_char(&mut self) -> Result<char> {
-        unimplemented!("TODO");
+        unimplemented!("TODO: remove");
     }
     
     fn parse_header(&mut self) -> Result<()> {
@@ -84,7 +85,7 @@ impl<'de> Deserializer<'de> {
         }
     }
 
-    fn parse_bool(&mut self) -> Result<bool> {
+    fn parse_logic(&mut self) -> Result<bool> {
         if &self.input[..4] == &[types::LOGIC, 0x00, 0x00, 0x00] {
             let i = &self.input[4..8];
             self.input = &self.input[8..];
@@ -94,18 +95,14 @@ impl<'de> Deserializer<'de> {
         }
     }
 
-    fn parse_unsigned<T>(&mut self) -> Result<T>
-    where
-        T: AddAssign<T> + MulAssign<T> + From<u8>,
-    {
-        unimplemented!("TODO");
-    }
-    
-    fn parse_signed<T>(&mut self) -> Result<T>
-    where
-        T: Neg<Output = T> + AddAssign<T> + MulAssign<T> + From<i8>,
-    {
-        unimplemented!("TODO");
+    fn parse_float(&mut self) -> Result<f64> {
+        if &self.input[..4] == &[types::FLOAT, 0x00, 0x00, 0x00] {
+            let i = [&self.input[8..12], &self.input[4..8]].concat(); // swap words
+            self.input = &self.input[12..];
+            Ok(f64::from_le_bytes(i.try_into().unwrap()))
+        } else {
+            Err(Error::ExpectedFloat)
+        }
     }
 
     fn parse_string(&mut self) -> Result<&'de str> {
@@ -130,7 +127,7 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut Deserializer<'de> {
     where
         V: Visitor<'de>,
     {
-        visitor.visit_bool(self.parse_bool()?)
+        visitor.visit_bool(self.parse_logic()?)
     }
 
     fn deserialize_i8<V>(self, visitor: V) -> Result<V::Value>
@@ -227,14 +224,14 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut Deserializer<'de> {
     where
         V: Visitor<'de>,
     {
-        unimplemented!("TODO");
+        _visitor.visit_f32(self.parse_float()? as f32)
     }
 
     fn deserialize_f64<V>(self, _visitor: V) -> Result<V::Value>
     where
         V: Visitor<'de>,
     {
-        unimplemented!("TODO");
+        _visitor.visit_f64(self.parse_float()?)
     }
 
     fn deserialize_char<V>(self, _visitor: V) -> Result<V::Value>
@@ -546,8 +543,8 @@ mod tests {
     
     #[test]
     fn test_seq() {
-        let j = &[0x52, 0x45, 0x44, 0x42, 0x49, 0x4E, 0x02, 0x00, 0x01, 0x00, 0x00, 0x00, 0x48, 0x00, 0x00, 0x00, 0x05, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x05, 0x00, 0x00, 0x00, 0x0B, 0x00, 0x00, 0x00, 0xFE, 0xFF, 0xFF, 0xFF, 0x0B, 0x00, 0x00, 0x00, 0x2B, 0x01, 0x00, 0x00, 0x0B, 0x00, 0x00, 0x00, 0x6A, 0x04, 0x01, 0x00, 0x05, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0x0B, 0x00, 0x00, 0x00, 0x05, 0x00, 0x00, 0x00, 0x0B, 0x00, 0x00, 0x00, 0x06, 0x00, 0x00, 0x00, 0x04, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00];
-        let expected: (i8, i16, u32, Vec<i16>, bool) = (-2, 299, 66666, vec![5, 6], true);
+        let j = &[0x52, 0x45, 0x44, 0x42, 0x49, 0x4E, 0x02, 0x00, 0x01, 0x00, 0x00, 0x00, 0x54, 0x00, 0x00, 0x00, 0x05, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x06, 0x00, 0x00, 0x00, 0x0B, 0x00, 0x00, 0x00, 0xFE, 0xFF, 0xFF, 0xFF, 0x0B, 0x00, 0x00, 0x00, 0x2B, 0x01, 0x00, 0x00, 0x0B, 0x00, 0x00, 0x00, 0x6A, 0x04, 0x01, 0x00, 0x05, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0x0B, 0x00, 0x00, 0x00, 0x05, 0x00, 0x00, 0x00, 0x0B, 0x00, 0x00, 0x00, 0x06, 0x00, 0x00, 0x00, 0x04, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x0C, 0x00, 0x00, 0x00, 0xA3, 0xD7, 0xFD, 0x40, 0x91, 0xED, 0x7C, 0xBF];
+        let expected: (i8, i16, u32, Vec<i16>, bool, f64) = (-2, 299, 66666, vec![5, 6], true, 122234.23425);
         assert_eq!(expected, from_bytes(j).unwrap());
     }
 

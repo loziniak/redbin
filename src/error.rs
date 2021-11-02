@@ -31,6 +31,7 @@ pub enum Error {
     Syntax,
     ExpectedLogic,
     ExpectedInteger,
+    ExpectedFloat,
     ExpectedBlock,
     ExpectedString,
     ExpectedNull,
