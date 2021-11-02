@@ -177,7 +177,11 @@ impl<'a> ser::Serializer for &'a mut Serializer {
     }
 
     fn serialize_tuple(self, len: usize) -> Result<Self::SerializeTuple> {
-        unimplemented!("TODO");
+        self.output.append(&mut Vec::from(types::BLOCK.to_le_bytes()));
+        self.output.append(&mut Vec::from([0x00, 0x00, 0x00, 0x00])); // position block on start
+        self.output.append(&mut Vec::from((len as i32).to_le_bytes()));
+        self.length = len as i32;
+        Ok(self)
     }
 
     fn serialize_tuple_struct(
@@ -243,7 +247,6 @@ impl<'a> ser::SerializeSeq for &'a mut Serializer {
         header.append(&mut Vec::from([0x00, 0x00, 0x00, 0x00])); // position block on start
         header.append(&mut Vec::from(self.length.to_le_bytes()));
 
-        //self.output.append(&mut Vec::from(_len.unwrap_or(0).to_le_bytes()));
         self.output.splice(0..0, header);
         Ok(())
     }
@@ -257,11 +260,14 @@ impl<'a> ser::SerializeTuple for &'a mut Serializer {
     where
         T: ?Sized + Serialize,
     {
-        unimplemented!("TODO");
+        let mut serializer = Serializer::new();
+        value.serialize(&mut serializer)?;
+        self.output.append(&mut serializer.output);
+        Ok(())
     }
 
     fn end(self) -> Result<()> {
-        unimplemented!("TODO");
+        Ok(())
     }
 }
 
@@ -370,29 +376,8 @@ mod tests {
     
     #[test]
     fn test_seq() {
-        let i: &[u8] = &[5, 6, 7];
-        let expected = &[0x52, 0x45, 0x44, 0x42, 0x49, 0x4E, // "REDBIN"
-            0x02, // version
-            0x00, // flags
-            0x01, 0x00, 0x00, 0x00, // length (number of records)
-            0x24, 0x00, 0x00, 0x00, // size of payload
-            
-            0x05, 0x00, 0x00, 0x00, // header, block! type = 5
-            0x00, 0x00, 0x00, 0x00, // block's index (0 = head)
-            0x03, 0x00, 0x00, 0x00, // elements
-            
-            // element data
-                // value 1
-                0x0B, 0x00, 0x00, 0x00, // header, integer! type = 11 (0x0B)
-                0x05, 0x00, 0x00, 0x00, // value, little endian
-                
-                //value 2
-                0x0B, 0x00, 0x00, 0x00, // header, integer! type = 11 (0x0B)
-                0x06, 0x00, 0x00, 0x00, // value, little endian
-                
-                //value 3
-                0x0B, 0x00, 0x00, 0x00, // header, integer! type = 11 (0x0B)
-                0x07, 0x00, 0x00, 0x00]; // value, little endian
+        let i: (i8, i16, u32, &[u8]) = (-2, 299, 66666, &[5, 6]);
+        let expected = &[0x52, 0x45, 0x44, 0x42, 0x49, 0x4E, 0x02, 0x00, 0x01, 0x00, 0x00, 0x00, 0x40, 0x00, 0x00, 0x00, 0x05, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x04, 0x00, 0x00, 0x00, 0x0B, 0x00, 0x00, 0x00, 0xFE, 0xFF, 0xFF, 0xFF, 0x0B, 0x00, 0x00, 0x00, 0x2B, 0x01, 0x00, 0x00, 0x0B, 0x00, 0x00, 0x00, 0x6A, 0x04, 0x01, 0x00, 0x05, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0x0B, 0x00, 0x00, 0x00, 0x05, 0x00, 0x00, 0x00, 0x0B, 0x00, 0x00, 0x00, 0x06, 0x00, 0x00, 0x00];
         assert_eq!(to_bytes(&i).unwrap(), expected);
     }
 
