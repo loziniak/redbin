@@ -29,7 +29,7 @@ pub enum Error {
     // are specific to the format, in this case JSON.
     Eof,
     Syntax,
-    ExpectedBoolean,
+    ExpectedLogic,
     ExpectedInteger,
     ExpectedBlock,
     ExpectedString,
