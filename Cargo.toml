@@ -14,6 +14,7 @@ publish = false
 
 [dependencies]
 serde = "1.0"
+iconv = "*"
 
 [dev-dependencies]
 serde_derive = "1.0"
