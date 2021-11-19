@@ -125,12 +125,12 @@ impl<'de> Deserializer<'de> {
             if refer {
                 unimplemented!("Redbin references not supported yet.");
             } else {
-                let head: i32 = i32::from_le_bytes((&self.input[4..8]).try_into().unwrap());
+                let head: usize = i32::from_le_bytes((&self.input[4..8]).try_into().unwrap()) as usize;
                 let length: usize = i32::from_le_bytes((&self.input[8..12]).try_into().unwrap()) as usize;
                 self.input = &self.input[12..];
 
                 let n = length * unit;
-                let bytes = &self.input[..n];
+                let bytes = &self.input[head..n];
 
                 self.input = &self.input[n..];
                 self.parse_padding()?;
