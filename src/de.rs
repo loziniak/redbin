@@ -9,6 +9,7 @@ use serde::de::{
 };
 use std::ops::{AddAssign, MulAssign, Neg};
 use std::convert::TryInto;
+use crate::iconv_tools::Ic;
 
 mod types {
     pub const LOGIC: u8 = 0x04;
@@ -18,14 +19,15 @@ mod types {
     pub const FLOAT: u8 = 0x0C;
 }
 
-pub struct Deserializer<'de> {
+pub struct Deserializer<'de, 'b> {
     input: &'de [u8],
+    ic: &'b mut Ic,
 }
 
-impl<'de> Deserializer<'de> {
+impl<'de, 'b> Deserializer<'de, 'b> {
     #[allow(clippy::should_implement_trait)]
-    pub fn from_bytes(input: &'de [u8]) -> Self {
-        Deserializer { input }
+    pub fn from_bytes(input: &'de [u8], ic: &'b mut Ic) -> Self {
+        Deserializer { input, ic }
     }
 }
 
@@ -33,7 +35,8 @@ pub fn from_bytes<'a, T>(s: &'a [u8]) -> Result<T>
 where
     T: Deserialize<'a>,
 {
-    let mut deserializer = Deserializer::from_bytes(s);
+    let mut ic = Ic::new();
+    let mut deserializer = Deserializer::from_bytes(s, &mut ic);
     deserializer.parse_header()?;
     let t = T::deserialize(&mut deserializer)?;
     if deserializer.input.is_empty() {
@@ -44,7 +47,7 @@ where
 }
 
 
-impl<'de> Deserializer<'de> {
+impl<'de, 'b> Deserializer<'de, 'b> {
 
     fn peek_char(&mut self) -> Result<char> {
         unimplemented!("TODO: remove");
@@ -139,8 +142,11 @@ impl<'de> Deserializer<'de> {
                     String::from_utf8(bytes.to_vec())
                         .map_err(|e| Error::Message(e.to_string()))
                 } else {
-                    let encoding = if unit == 2 {"UCS-2LE"} else {"UCS-4LE"};
-                    iconv::decode(bytes, encoding)
+                    if unit == 2 {
+                        self.ic.ucs2_decode(bytes)
+                    } else {
+                        self.ic.ucs4_decode(bytes)
+                    }
                         .map_err(|e| Error::Message(e.to_string()))
                 }
             }
@@ -150,7 +156,7 @@ impl<'de> Deserializer<'de> {
     }
 }
 
-impl<'de, 'a> de::Deserializer<'de> for &'a mut Deserializer<'de> {
+impl<'de, 'a, 'b> de::Deserializer<'de> for &'a mut Deserializer<'de, 'b> {
     type Error = Error;
 
     // Look at the input data to decide what Serde data model type to
@@ -422,21 +428,21 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut Deserializer<'de> {
 // In order to handle commas correctly when deserializing a JSON array or map,
 // we need to track whether we are on the first element or past the first
 // element.
-struct CommaSeparated<'a, 'de: 'a> {
-    de: &'a mut Deserializer<'de>,
+struct CommaSeparated<'a, 'de: 'a, 'b> {
+    de: &'a mut Deserializer<'de, 'b>,
     first: bool,
     elements: i32,
 }
 
-impl<'a, 'de> CommaSeparated<'a, 'de> {
-    fn new(de: &'a mut Deserializer<'de>, len: i32) -> Self {
+impl<'a, 'de, 'b> CommaSeparated<'a, 'de, 'b> {
+    fn new(de: &'a mut Deserializer<'de, 'b>, len: i32) -> Self {
         CommaSeparated { de, first: true, elements: len }
     }
 }
 
 // `SeqAccess` is provided to the `Visitor` to give it the ability to iterate
 // through elements of the sequence.
-impl<'de, 'a> SeqAccess<'de> for CommaSeparated<'a, 'de> {
+impl<'de, 'a, 'b> SeqAccess<'de> for CommaSeparated<'a, 'de, 'b> {
     type Error = Error;
 
     fn next_element_seed<T>(&mut self, seed: T) -> Result<Option<T::Value>>
@@ -460,7 +466,7 @@ impl<'de, 'a> SeqAccess<'de> for CommaSeparated<'a, 'de> {
 
 // `MapAccess` is provided to the `Visitor` to give it the ability to iterate
 // through entries of the map.
-impl<'de, 'a> MapAccess<'de> for CommaSeparated<'a, 'de> {
+impl<'de, 'a, 'b> MapAccess<'de> for CommaSeparated<'a, 'de, 'b> {
     type Error = Error;
 
     fn next_key_seed<K>(&mut self, seed: K) -> Result<Option<K::Value>>
@@ -495,12 +501,12 @@ impl<'de, 'a> MapAccess<'de> for CommaSeparated<'a, 'de> {
     }
 }
 
-struct Enum<'a, 'de: 'a> {
-    de: &'a mut Deserializer<'de>,
+struct Enum<'a, 'de: 'a, 'b> {
+    de: &'a mut Deserializer<'de, 'b>,
 }
 
-impl<'a, 'de> Enum<'a, 'de> {
-    fn new(de: &'a mut Deserializer<'de>) -> Self {
+impl<'a, 'de, 'b> Enum<'a, 'de, 'b> {
+    fn new(de: &'a mut Deserializer<'de, 'b>) -> Self {
         Enum { de }
     }
 }
@@ -510,7 +516,7 @@ impl<'a, 'de> Enum<'a, 'de> {
 //
 // Note that all enum deserialization methods in Serde refer exclusively to the
 // "externally tagged" enum representation.
-impl<'de, 'a> EnumAccess<'de> for Enum<'a, 'de> {
+impl<'de, 'a, 'b> EnumAccess<'de> for Enum<'a, 'de, 'b> {
     type Error = Error;
     type Variant = Self;
 
@@ -533,7 +539,7 @@ impl<'de, 'a> EnumAccess<'de> for Enum<'a, 'de> {
 
 // `VariantAccess` is provided to the `Visitor` to give it the ability to see
 // the content of the single variant that it decided to deserialize.
-impl<'de, 'a> VariantAccess<'de> for Enum<'a, 'de> {
+impl<'de, 'a, 'b> VariantAccess<'de> for Enum<'a, 'de, 'b> {
     type Error = Error;
 
     // If the `Visitor` expected this variant to be a unit variant, the input

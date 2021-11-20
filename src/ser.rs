@@ -4,6 +4,7 @@
 
 use crate::error::{Error, Result};
 use serde::ser::{self, Serialize};
+use crate::iconv_tools::Ic;
 
 mod types {
     pub const LOGIC: i32 = 0x04_i32;
@@ -13,16 +14,18 @@ mod types {
     pub const FLOAT: i32 = 0x0C_i32;
 }
 
-pub struct Serializer {
+pub struct Serializer<'b> {
     output: Vec<u8>,
     length: i32,
+    ic: &'b mut Ic,
 }
 
-impl Serializer {
-    pub fn new() -> Self {
+impl<'b> Serializer<'b> {
+    pub fn new_with(ic1: &'b mut Ic) -> Self {
         Serializer {
             output: Vec::new(),
             length: 0,
+            ic: ic1
         }
     }
 }
@@ -31,18 +34,25 @@ pub fn to_bytes<T>(value: &T) -> Result<Vec<u8>>
 where
     T: Serialize,
 {
+    to_bytes_with(&mut Ic::new(), value)
+}
+
+pub fn to_bytes_with<T>(ic: &mut Ic, value: &T) -> Result<Vec<u8>>
+where
+    T: Serialize,
+{
     let mut header = Vec::from([0x52, 0x45, 0x44, 0x42, 0x49, 0x4E, // "REDBIN"
             0x02, // version
             0x00, // flags
             0x01, 0x00, 0x00, 0x00]); // length (number of records))
 
-    let mut serializer = Serializer::new();
+    let mut serializer = Serializer::new_with(ic);
     value.serialize(&mut serializer)?;
     header.append(&mut Vec::from((serializer.output.len() as i32).to_le_bytes())); // size of payload
     Ok([&header[..], &serializer.output[..]].concat())
 }
 
-impl<'a> ser::Serializer for &'a mut Serializer {
+impl<'a> ser::Serializer for &'a mut Serializer<'_> {
     type Ok = ();
 
     type Error = Error;
@@ -135,7 +145,7 @@ impl<'a> ser::Serializer for &'a mut Serializer {
                 ((4 - (len % 4)) % 4) as usize)
         } else { // Unicode
             header[1] = 0x04; // 4-byte characters, UCS-4
-            (iconv::encode(v, "UCS-4LE")
+            (self.ic.ucs4_encode(v)
                 .map_err(|e| Error::Message(e.to_string()))?,
                 0 as usize)
         };
@@ -261,7 +271,7 @@ impl<'a> ser::Serializer for &'a mut Serializer {
     }
 }
 
-impl<'a> ser::SerializeSeq for &'a mut Serializer {
+impl<'a> ser::SerializeSeq for &'a mut Serializer<'_> {
     type Ok = ();
     type Error = Error;
 
@@ -269,7 +279,7 @@ impl<'a> ser::SerializeSeq for &'a mut Serializer {
     where
         T: ?Sized + Serialize,
     {
-        let mut serializer = Serializer::new();
+        let mut serializer = Serializer::new_with(self.ic);
         value.serialize(&mut serializer)?;
         self.output.append(&mut serializer.output);
         self.length += 1;
@@ -288,7 +298,7 @@ impl<'a> ser::SerializeSeq for &'a mut Serializer {
     }
 }
 
-impl<'a> ser::SerializeTuple for &'a mut Serializer {
+impl<'a> ser::SerializeTuple for &'a mut Serializer<'_> {
     type Ok = ();
     type Error = Error;
 
@@ -296,7 +306,7 @@ impl<'a> ser::SerializeTuple for &'a mut Serializer {
     where
         T: ?Sized + Serialize,
     {
-        let mut serializer = Serializer::new();
+        let mut serializer = Serializer::new_with(self.ic);
         value.serialize(&mut serializer)?;
         self.output.append(&mut serializer.output);
         Ok(())
@@ -307,7 +317,7 @@ impl<'a> ser::SerializeTuple for &'a mut Serializer {
     }
 }
 
-impl<'a> ser::SerializeTupleStruct for &'a mut Serializer {
+impl<'a> ser::SerializeTupleStruct for &'a mut Serializer<'_> {
     type Ok = ();
     type Error = Error;
 
@@ -323,7 +333,7 @@ impl<'a> ser::SerializeTupleStruct for &'a mut Serializer {
     }
 }
 
-impl<'a> ser::SerializeTupleVariant for &'a mut Serializer {
+impl<'a> ser::SerializeTupleVariant for &'a mut Serializer<'_> {
     type Ok = ();
     type Error = Error;
 
@@ -339,7 +349,7 @@ impl<'a> ser::SerializeTupleVariant for &'a mut Serializer {
     }
 }
 
-impl<'a> ser::SerializeMap for &'a mut Serializer {
+impl<'a> ser::SerializeMap for &'a mut Serializer<'_> {
     type Ok = ();
     type Error = Error;
 
@@ -362,7 +372,7 @@ impl<'a> ser::SerializeMap for &'a mut Serializer {
     }
 }
 
-impl<'a> ser::SerializeStruct for &'a mut Serializer {
+impl<'a> ser::SerializeStruct for &'a mut Serializer<'_> {
     type Ok = ();
     type Error = Error;
 
@@ -378,7 +388,7 @@ impl<'a> ser::SerializeStruct for &'a mut Serializer {
     }
 }
 
-impl<'a> ser::SerializeStructVariant for &'a mut Serializer {
+impl<'a> ser::SerializeStructVariant for &'a mut Serializer<'_> {
     type Ok = ();
     type Error = Error;
 
