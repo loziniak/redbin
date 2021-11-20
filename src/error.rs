@@ -42,6 +42,7 @@ pub enum Error {
     ExpectedMapComma,
     ExpectedMapEnd,
     ExpectedEnum,
+    ExpectedChar,
     TrailingBytes,
     SizeMismatch
 }
