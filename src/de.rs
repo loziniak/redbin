@@ -12,6 +12,7 @@ use std::convert::TryInto;
 use crate::iconv_tools::Ic;
 
 mod types {
+    pub const NONE: u8 = 0x03;
     pub const LOGIC: u8 = 0x04;
     pub const BLOCK: u8 = 0x05;
     pub const STRING: u8 = 0x07;
@@ -199,6 +200,16 @@ impl<'de, 'b> Deserializer<'de, 'b> {
         }
     }
     
+    fn parse_none(&mut self) -> Result<()> {
+        self.parse_padding()?;
+        if self.input[0] == types::NONE {
+            self.input = &self.input[4..];
+            Ok(())
+        } else {
+            Err(Error::ExpectedNone)
+        }
+    }
+
 }
 
 impl<'de, 'a, 'b> de::Deserializer<'de> for &'a mut Deserializer<'de, 'b> {
@@ -364,14 +375,21 @@ impl<'de, 'a, 'b> de::Deserializer<'de> for &'a mut Deserializer<'de, 'b> {
     where
         V: Visitor<'de>,
     {
-        unimplemented!("TODO");
+        self.parse_padding()?;
+        if self.input[0] == types::NONE {
+            self.input = &self.input[4..];
+            visitor.visit_none()
+        } else {
+            visitor.visit_some(self)
+        }
     }
 
     fn deserialize_unit<V>(self, visitor: V) -> Result<V::Value>
     where
         V: Visitor<'de>,
     {
-        unimplemented!("TODO");
+        self.parse_none()?;
+        visitor.visit_unit()
     }
 
     fn deserialize_unit_struct<V>(
@@ -640,6 +658,10 @@ mod tests {
         let expected: (i8, i16, u32, Vec<i16>, bool, f64, f32, String, String, String, char, ByteBuf)
             = (-2, 299, 66666, vec![5, 6], true, 122234.23425, 12.5, String::from("aa"), String::from("ą"), String::from("💖"), 'a', ByteBuf::from([0xCA, 0xFE]));
         assert_eq!(expected, from_bytes(j).unwrap());
+        
+        assert_eq!((), from_bytes::<()>(&[0x52, 0x45, 0x44, 0x42, 0x49, 0x4E, 0x02, 0x00, 0x01, 0x00, 0x00, 0x00, 0x04, 0x00, 0x00, 0x00, 0x03, 0x00, 0x00, 0x00]).unwrap());
+        assert_eq!(None, from_bytes::<Option<i32>>(&[0x52, 0x45, 0x44, 0x42, 0x49, 0x4E, 0x02, 0x00, 0x01, 0x00, 0x00, 0x00, 0x04, 0x00, 0x00, 0x00, 0x03, 0x00, 0x00, 0x00]).unwrap());
+        assert_eq!(Some(123), from_bytes::<Option<i32>>(&[0x52, 0x45, 0x44, 0x42, 0x49, 0x4E, 0x02, 0x00, 0x01, 0x00, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00, 0x0B, 0x00, 0x00, 0x00, 0x7B, 0x00, 0x00, 0x00]).unwrap());
     }
 
 }

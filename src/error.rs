@@ -44,6 +44,7 @@ pub enum Error {
     ExpectedEnum,
     ExpectedChar,
     ExpectedBinary,
+    ExpectedNone,
     TrailingBytes,
     SizeMismatch
 }
