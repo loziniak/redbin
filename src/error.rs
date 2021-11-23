@@ -37,14 +37,13 @@ pub enum Error {
     ExpectedNull,
     ExpectedArray,
     ExpectedArrayEnd,
-    ExpectedMap,
-    ExpectedMapColon,
-    ExpectedMapComma,
-    ExpectedMapEnd,
+    ExpectedVariantColon,
     ExpectedEnum,
     ExpectedChar,
     ExpectedBinary,
     ExpectedNone,
+    ExpectedEvenLength,
+    NoMapValue,
     TrailingBytes,
     SizeMismatch
 }

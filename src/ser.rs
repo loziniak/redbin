@@ -31,6 +31,33 @@ impl<'b> Serializer<'b> {
             ic: ic1
         }
     }
+
+    fn tuples(&mut self, len: usize) -> () {
+        self.output.append(&mut Vec::from(types::BLOCK.to_le_bytes()));
+        self.output.append(&mut Vec::from([0x00, 0x00, 0x00, 0x00])); // position block on start
+        self.output.append(&mut Vec::from((len as i32).to_le_bytes()));
+        self.length = len as i32;
+    }
+    
+    fn elements<T>(&mut self, value: &T) -> Result<()>
+    where
+        T: ?Sized + Serialize,
+    {
+        let mut serializer = Serializer::new_with(self.ic);
+        value.serialize(&mut serializer)?;
+        self.output.append(&mut serializer.output);
+        Ok(())
+    }
+    
+    fn block_header(&mut self) -> () {
+        let mut header = Vec::new();
+        
+        header.append(&mut Vec::from(types::BLOCK.to_le_bytes()));
+        header.append(&mut Vec::from([0x00, 0x00, 0x00, 0x00])); // position block on start
+        header.append(&mut Vec::from(self.length.to_le_bytes()));
+
+        self.output.splice(0..0, header);
+    }
 }
 
 pub fn to_bytes<T>(value: &T) -> Result<Vec<u8>>
@@ -205,7 +232,7 @@ impl<'a> ser::Serializer for &'a mut Serializer<'_> {
     }
 
     fn serialize_unit_struct(self, _name: &'static str) -> Result<()> {
-        unimplemented!("TODO");
+        self.serialize_none()
     }
 
     fn serialize_unit_variant(
@@ -225,7 +252,7 @@ impl<'a> ser::Serializer for &'a mut Serializer<'_> {
     where
         T: ?Sized + Serialize,
     {
-        unimplemented!("TODO");
+        value.serialize(self)
     }
 
     fn serialize_newtype_variant<T>(
@@ -246,10 +273,7 @@ impl<'a> ser::Serializer for &'a mut Serializer<'_> {
     }
 
     fn serialize_tuple(self, len: usize) -> Result<Self::SerializeTuple> {
-        self.output.append(&mut Vec::from(types::BLOCK.to_le_bytes()));
-        self.output.append(&mut Vec::from([0x00, 0x00, 0x00, 0x00])); // position block on start
-        self.output.append(&mut Vec::from((len as i32).to_le_bytes()));
-        self.length = len as i32;
+        self.tuples(len);
         Ok(self)
     }
 
@@ -258,7 +282,8 @@ impl<'a> ser::Serializer for &'a mut Serializer<'_> {
         _name: &'static str,
         len: usize,
     ) -> Result<Self::SerializeTupleStruct> {
-        unimplemented!("TODO");
+        self.tuples(len);
+        Ok(self)
     }
 
     fn serialize_tuple_variant(
@@ -272,7 +297,7 @@ impl<'a> ser::Serializer for &'a mut Serializer<'_> {
     }
 
     fn serialize_map(self, _len: Option<usize>) -> Result<Self::SerializeMap> {
-        unimplemented!("TODO");
+        Ok(self)
     }
 
     fn serialize_struct(
@@ -302,21 +327,13 @@ impl<'a> ser::SerializeSeq for &'a mut Serializer<'_> {
     where
         T: ?Sized + Serialize,
     {
-        let mut serializer = Serializer::new_with(self.ic);
-        value.serialize(&mut serializer)?;
-        self.output.append(&mut serializer.output);
+        self.elements(value)?;
         self.length += 1;
         Ok(())
     }
 
     fn end(self) -> Result<()> {
-        let mut header = Vec::new();
-        
-        header.append(&mut Vec::from(types::BLOCK.to_le_bytes()));
-        header.append(&mut Vec::from([0x00, 0x00, 0x00, 0x00])); // position block on start
-        header.append(&mut Vec::from(self.length.to_le_bytes()));
-
-        self.output.splice(0..0, header);
+        self.block_header();
         Ok(())
     }
 }
@@ -329,9 +346,7 @@ impl<'a> ser::SerializeTuple for &'a mut Serializer<'_> {
     where
         T: ?Sized + Serialize,
     {
-        let mut serializer = Serializer::new_with(self.ic);
-        value.serialize(&mut serializer)?;
-        self.output.append(&mut serializer.output);
+        self.elements(value)?;
         Ok(())
     }
 
@@ -348,11 +363,12 @@ impl<'a> ser::SerializeTupleStruct for &'a mut Serializer<'_> {
     where
         T: ?Sized + Serialize,
     {
-        unimplemented!("TODO");
+        self.elements(value)?;
+        Ok(())
     }
 
     fn end(self) -> Result<()> {
-        unimplemented!("TODO");
+        Ok(())
     }
 }
 
@@ -380,18 +396,23 @@ impl<'a> ser::SerializeMap for &'a mut Serializer<'_> {
     where
         T: ?Sized + Serialize,
     {
-        unimplemented!("TODO");
+        self.elements(key)?;
+        self.length += 1;
+        Ok(())
     }
 
     fn serialize_value<T>(&mut self, value: &T) -> Result<()>
     where
         T: ?Sized + Serialize,
     {
-        unimplemented!("TODO");
+        self.elements(value)?;
+        self.length += 1;
+        Ok(())
     }
 
     fn end(self) -> Result<()> {
-        unimplemented!("TODO");
+        self.block_header();
+        Ok(())
     }
 }
 
@@ -483,6 +504,54 @@ mod tests {
         assert_eq!(to_bytes::<Option<i32>>(&Some(123)).unwrap(),
             &[0x52, 0x45, 0x44, 0x42, 0x49, 0x4E, 0x02, 0x00, 0x01, 0x00, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00,
             0x0B, 0x00, 0x00, 0x00, 0x7B, 0x00, 0x00, 0x00]);
+
+
+        #[derive(Serialize, std::cmp::PartialEq, Debug)]
+        struct NothingSpecial;
+        let test_something = NothingSpecial {};
+
+        // rust-redbin-helper none
+        assert_eq!(to_bytes(&test_something).unwrap(),
+            &[0x52, 0x45, 0x44, 0x42, 0x49, 0x4E, 0x02, 0x00, 0x01, 0x00, 0x00, 0x00, 0x04, 0x00, 0x00, 0x00,
+            0x03, 0x00, 0x00, 0x00]);
+
+
+        #[derive(Serialize, std::cmp::PartialEq, Debug)]
+        struct Num(i32);
+        let fifteen = Num(15);
+
+        // rust-redbin-helper 15
+        assert_eq!(to_bytes(&fifteen).unwrap(),
+            &[0x52, 0x45, 0x44, 0x42, 0x49, 0x4E, 0x02, 0x00, 0x01, 0x00, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00,
+            0x0B, 0x00, 0x00, 0x00, 0x0F, 0x00, 0x00, 0x00]);
+
+
+        #[derive(Serialize, std::cmp::PartialEq, Debug)]
+        struct Color(u8, u8, u8);
+        let red = Color(255, 0, 0);
+
+        // rust-redbin-helper [255 0 0]
+        assert_eq!(to_bytes(&red).unwrap(),
+            &[0x52, 0x45, 0x44, 0x42, 0x49, 0x4E, 0x02, 0x00, 0x01, 0x00, 0x00, 0x00, 0x24, 0x00, 0x00, 0x00,
+            0x05, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x03, 0x00, 0x00, 0x00,
+                0x0B, 0x00, 0x00, 0x00, 0xFF, 0x00, 0x00, 0x00,
+                0x0B, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+                0x0B, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]);
+
+
+        let mut test_map: std::collections::BTreeMap<String, f64> = std::collections::BTreeMap::new();
+        test_map.insert(String::from("a"), 12.5);
+        test_map.insert(String::from("b"), 100.1);
+
+        // rust-redbin-helper ["a" 12.5 "b" 100.1]
+        assert_eq!(to_bytes(&test_map).unwrap(),
+            &[0x52, 0x45, 0x44, 0x42, 0x49, 0x4E, 0x02, 0x00, 0x01, 0x00, 0x00, 0x00, 0x44, 0x00, 0x00, 0x00,
+            0x05, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x04, 0x00, 0x00, 0x00,
+                0x07, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x61, 0x00, 0x00, 0x00, 
+                0x0C, 0x00, 0x00, 0x00, 0x00, 0x00, 0x29, 0x40, 0x00, 0x00, 0x00, 0x00,
+                0x07, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x62, 0x00, 0x00, 0x00, 
+                0x0C, 0x00, 0x00, 0x00, 0x66, 0x06, 0x59, 0x40, 0x66, 0x66, 0x66, 0x66]);
+
     }
 
 }

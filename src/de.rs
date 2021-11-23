@@ -15,6 +15,7 @@ mod types {
     pub const NONE: u8 = 0x03;
     pub const LOGIC: u8 = 0x04;
     pub const BLOCK: u8 = 0x05;
+    pub const PAREN: u8 = 0x06;
     pub const STRING: u8 = 0x07;
     pub const CHAR: u8 = 0x0A;
     pub const INTEGER: u8 = 0x0B;
@@ -90,15 +91,23 @@ impl<'de, 'b> Deserializer<'de, 'b> {
         }
     }
     
-    fn parse_block_header(&mut self) -> Result<i32> {
+    fn parse_any_block_header(&mut self, record_type: u8) -> Result<i32> {
         self.parse_padding()?;
-        if &self.input[..4] == &[types::BLOCK, 0x00, 0x00, 0x00] {
+        if &self.input[..4] == &[record_type, 0x00, 0x00, 0x00] {
             let len = &self.input[8..12];
             self.input = &self.input[12..];
             Ok(i32::from_le_bytes(len.try_into().unwrap()))
         } else {
             Err(Error::ExpectedBlock)
         }
+    }
+
+    fn parse_block_header(&mut self) -> Result<i32> {
+        self.parse_any_block_header(types::BLOCK)
+    }
+
+    fn parse_paren_header(&mut self) -> Result<i32> {
+        self.parse_any_block_header(types::PAREN)
     }
 
     fn parse_logic(&mut self) -> Result<bool> {
@@ -400,7 +409,7 @@ impl<'de, 'a, 'b> de::Deserializer<'de> for &'a mut Deserializer<'de, 'b> {
     where
         V: Visitor<'de>,
     {
-        unimplemented!("TODO");
+        self.deserialize_unit(visitor)
     }
 
     fn deserialize_newtype_struct<V>(
@@ -411,7 +420,7 @@ impl<'de, 'a, 'b> de::Deserializer<'de> for &'a mut Deserializer<'de, 'b> {
     where
         V: Visitor<'de>,
     {
-        unimplemented!("TODO");
+        visitor.visit_newtype_struct(self)
     }
 
     fn deserialize_seq<V>(self, visitor: V) -> Result<V::Value>
@@ -419,7 +428,7 @@ impl<'de, 'a, 'b> de::Deserializer<'de> for &'a mut Deserializer<'de, 'b> {
         V: Visitor<'de>,
     {
         let len = self.parse_block_header()?;
-        let value = visitor.visit_seq(CommaSeparated::new(self, len))?;
+        let value = visitor.visit_seq(BlockData::new(self, len))?;
         Ok(value)
     }
 
@@ -439,14 +448,19 @@ impl<'de, 'a, 'b> de::Deserializer<'de> for &'a mut Deserializer<'de, 'b> {
     where
         V: Visitor<'de>,
     {
-        unimplemented!("TODO");
+        self.deserialize_tuple(_len, visitor)
     }
 
     fn deserialize_map<V>(self, visitor: V) -> Result<V::Value>
     where
         V: Visitor<'de>,
     {
-        unimplemented!("TODO");
+        let len = self.parse_block_header()?;
+        if len % 2 != 0 {
+            return Err(Error::ExpectedEvenLength)
+        }
+        let value = visitor.visit_map(BlockData::new(self, len))?;
+        Ok(value)
     }
 
     fn deserialize_struct<V>(
@@ -491,21 +505,20 @@ impl<'de, 'a, 'b> de::Deserializer<'de> for &'a mut Deserializer<'de, 'b> {
 // In order to handle commas correctly when deserializing a JSON array or map,
 // we need to track whether we are on the first element or past the first
 // element.
-struct CommaSeparated<'a, 'de: 'a, 'b> {
+struct BlockData<'a, 'de: 'a, 'b> {
     de: &'a mut Deserializer<'de, 'b>,
-    first: bool,
     elements: i32,
 }
 
-impl<'a, 'de, 'b> CommaSeparated<'a, 'de, 'b> {
+impl<'a, 'de, 'b> BlockData<'a, 'de, 'b> {
     fn new(de: &'a mut Deserializer<'de, 'b>, len: i32) -> Self {
-        CommaSeparated { de, first: true, elements: len }
+        BlockData { de, elements: len }
     }
 }
 
 // `SeqAccess` is provided to the `Visitor` to give it the ability to iterate
 // through elements of the sequence.
-impl<'de, 'a, 'b> SeqAccess<'de> for CommaSeparated<'a, 'de, 'b> {
+impl<'de, 'a, 'b> SeqAccess<'de> for BlockData<'a, 'de, 'b> {
     type Error = Error;
 
     fn next_element_seed<T>(&mut self, seed: T) -> Result<Option<T::Value>>
@@ -517,7 +530,6 @@ impl<'de, 'a, 'b> SeqAccess<'de> for CommaSeparated<'a, 'de, 'b> {
         }
         // Deserialize an array element.
         let v = seed.deserialize(&mut *self.de).map(Some)?;
-        self.first = false;
         self.elements -= 1;
         Ok(v)
     }
@@ -529,38 +541,31 @@ impl<'de, 'a, 'b> SeqAccess<'de> for CommaSeparated<'a, 'de, 'b> {
 
 // `MapAccess` is provided to the `Visitor` to give it the ability to iterate
 // through entries of the map.
-impl<'de, 'a, 'b> MapAccess<'de> for CommaSeparated<'a, 'de, 'b> {
+impl<'de, 'a, 'b> MapAccess<'de> for BlockData<'a, 'de, 'b> {
     type Error = Error;
 
     fn next_key_seed<K>(&mut self, seed: K) -> Result<Option<K::Value>>
     where
         K: DeserializeSeed<'de>,
     {
-        // Check if there are no more entries.
-        if self.de.peek_char()? == '}' {
+        if self.elements < 2 {
             return Ok(None);
         }
-        // Comma is required before every entry except the first.
-        if !self.first && self.de.next_char()? != ',' {
-            return Err(Error::ExpectedMapComma);
-        }
-        self.first = false;
-        // Deserialize a map key.
-        seed.deserialize(&mut *self.de).map(Some)
+        let k = seed.deserialize(&mut *self.de).map(Some)?;
+        self.elements -= 1;
+        Ok(k)
     }
 
     fn next_value_seed<V>(&mut self, seed: V) -> Result<V::Value>
     where
         V: DeserializeSeed<'de>,
     {
-        // It doesn't make a difference whether the colon is parsed at the end
-        // of `next_key_seed` or at the beginning of `next_value_seed`. In this
-        // case the code is a bit simpler having it here.
-        if self.de.next_char()? != ':' {
-            return Err(Error::ExpectedMapColon);
+        if self.elements < 1 {
+            return Err(Error::NoMapValue);
         }
-        // Deserialize a map value.
-        seed.deserialize(&mut *self.de)
+        let v = seed.deserialize(&mut *self.de)?;
+        self.elements -= 1;
+        Ok(v)
     }
 }
 
@@ -595,7 +600,7 @@ impl<'de, 'a, 'b> EnumAccess<'de> for Enum<'a, 'de, 'b> {
         if self.de.next_char()? == ':' {
             Ok((val, self))
         } else {
-            Err(Error::ExpectedMapColon)
+            Err(Error::ExpectedVariantColon)
         }
     }
 }
@@ -692,6 +697,57 @@ mod tests {
             0x0B, 0x00, 0x00, 0x00, 0x7B, 0x00, 0x00, 0x00]
         ).unwrap());
         
+        
+        #[derive(Deserialize, std::cmp::PartialEq, Debug)]
+        struct NothingSpecial;
+        let test_something = NothingSpecial {};
+
+        // rust-redbin-helper none
+        assert_eq!(test_something, from_bytes::<NothingSpecial>(
+            &[0x52, 0x45, 0x44, 0x42, 0x49, 0x4E, 0x02, 0x00, 0x01, 0x00, 0x00, 0x00, 0x04, 0x00, 0x00, 0x00,
+            0x03, 0x00, 0x00, 0x00]
+        ).unwrap());
+
+
+        #[derive(Deserialize, std::cmp::PartialEq, Debug)]
+        struct Num(i32);
+        let fifteen = Num(15);
+
+        // rust-redbin-helper 15
+        assert_eq!(fifteen, from_bytes::<Num>(
+            &[0x52, 0x45, 0x44, 0x42, 0x49, 0x4E, 0x02, 0x00, 0x01, 0x00, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00,
+            0x0B, 0x00, 0x00, 0x00, 0x0F, 0x00, 0x00, 0x00]
+        ).unwrap());
+
+
+        #[derive(Deserialize, std::cmp::PartialEq, Debug)]
+        struct Color(u8, u8, u8);
+        let red = Color(255, 0, 0);
+
+        // rust-redbin-helper [255 0 0]
+        assert_eq!(red, from_bytes(
+            &[0x52, 0x45, 0x44, 0x42, 0x49, 0x4E, 0x02, 0x00, 0x01, 0x00, 0x00, 0x00, 0x24, 0x00, 0x00, 0x00,
+            0x05, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x03, 0x00, 0x00, 0x00,
+                0x0B, 0x00, 0x00, 0x00, 0xFF, 0x00, 0x00, 0x00,
+                0x0B, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+                0x0B, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]
+        ).unwrap());
+
+
+        let mut test_map: std::collections::BTreeMap<String, f64> = std::collections::BTreeMap::new();
+        test_map.insert(String::from("a"), 12.5);
+        test_map.insert(String::from("b"), 100.1);
+
+        // rust-redbin-helper ["a" 12.5 "b" 100.1]
+        assert_eq!(test_map, from_bytes(
+            &[0x52, 0x45, 0x44, 0x42, 0x49, 0x4E, 0x02, 0x00, 0x01, 0x00, 0x00, 0x00, 0x4C, 0x00, 0x00, 0x00,
+            0x05, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x04, 0x00, 0x00, 0x00,
+                0x07, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x61, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 
+                0x0C, 0x00, 0x00, 0x00, 0x00, 0x00, 0x29, 0x40, 0x00, 0x00, 0x00, 0x00,
+                0x07, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x62, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 
+                0x0C, 0x00, 0x00, 0x00, 0x66, 0x06, 0x59, 0x40, 0x66, 0x66, 0x66, 0x66]
+        ).unwrap());
+
     }
 
 }
