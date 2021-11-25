@@ -32,7 +32,7 @@ impl<'b> Serializer<'b> {
         }
     }
 
-    fn tuples(&mut self, len: usize) -> () {
+    fn block_header_with(&mut self, len: usize) -> () {
         self.output.append(&mut Vec::from(types::BLOCK.to_le_bytes()));
         self.output.append(&mut Vec::from([0x00, 0x00, 0x00, 0x00])); // position block on start
         self.output.append(&mut Vec::from((len as i32).to_le_bytes()));
@@ -273,7 +273,7 @@ impl<'a> ser::Serializer for &'a mut Serializer<'_> {
     }
 
     fn serialize_tuple(self, len: usize) -> Result<Self::SerializeTuple> {
-        self.tuples(len);
+        self.block_header_with(len);
         Ok(self)
     }
 
@@ -282,7 +282,7 @@ impl<'a> ser::Serializer for &'a mut Serializer<'_> {
         _name: &'static str,
         len: usize,
     ) -> Result<Self::SerializeTupleStruct> {
-        self.tuples(len);
+        self.block_header_with(len);
         Ok(self)
     }
 
@@ -305,7 +305,7 @@ impl<'a> ser::Serializer for &'a mut Serializer<'_> {
         _name: &'static str,
         len: usize,
     ) -> Result<Self::SerializeStruct> {
-        self.tuples(len * 2);
+        self.block_header_with(len * 2);
         Ok(self)
     }
 

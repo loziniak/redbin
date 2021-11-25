@@ -15,7 +15,6 @@ mod types {
     pub const NONE: u8 = 0x03;
     pub const LOGIC: u8 = 0x04;
     pub const BLOCK: u8 = 0x05;
-    pub const PAREN: u8 = 0x06;
     pub const STRING: u8 = 0x07;
     pub const CHAR: u8 = 0x0A;
     pub const INTEGER: u8 = 0x0B;
@@ -53,14 +52,6 @@ where
 
 impl<'de, 'b> Deserializer<'de, 'b> {
 
-    fn peek_char(&mut self) -> Result<char> {
-        unimplemented!("TODO: remove");
-    }
-
-    fn next_char(&mut self) -> Result<char> {
-        unimplemented!("TODO: remove");
-    }
-    
     fn parse_padding(&mut self) -> Result<()> {
         while self.input.len() > 0 && self.input[0] == 0x00 {
             self.input = &self.input[1..];
@@ -91,23 +82,15 @@ impl<'de, 'b> Deserializer<'de, 'b> {
         }
     }
     
-    fn parse_any_block_header(&mut self, record_type: u8) -> Result<i32> {
+    fn parse_block_header(&mut self) -> Result<i32> {
         self.parse_padding()?;
-        if &self.input[..4] == &[record_type, 0x00, 0x00, 0x00] {
+        if &self.input[..4] == &[types::BLOCK, 0x00, 0x00, 0x00] {
             let len = &self.input[8..12];
             self.input = &self.input[12..];
             Ok(i32::from_le_bytes(len.try_into().unwrap()))
         } else {
             Err(Error::ExpectedBlock)
         }
-    }
-
-    fn parse_block_header(&mut self) -> Result<i32> {
-        self.parse_any_block_header(types::BLOCK)
-    }
-
-    fn parse_paren_header(&mut self) -> Result<i32> {
-        self.parse_any_block_header(types::PAREN)
     }
 
     fn parse_logic(&mut self) -> Result<bool> {
