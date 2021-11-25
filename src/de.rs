@@ -472,7 +472,7 @@ impl<'de, 'a, 'b> de::Deserializer<'de> for &'a mut Deserializer<'de, 'b> {
     where
         V: Visitor<'de>,
     {
-        unimplemented!("TODO");
+        self.deserialize_map(visitor)
     }
 
     fn deserialize_enum<V>(
@@ -491,7 +491,7 @@ impl<'de, 'a, 'b> de::Deserializer<'de> for &'a mut Deserializer<'de, 'b> {
     where
         V: Visitor<'de>,
     {
-        unimplemented!("TODO");
+        self.deserialize_string(visitor)
     }
 
     fn deserialize_ignored_any<V>(self, visitor: V) -> Result<V::Value>
@@ -595,13 +595,14 @@ impl<'de, 'a, 'b> EnumAccess<'de> for Enum<'a, 'de, 'b> {
         // The `deserialize_enum` method parsed a `{` character so we are
         // currently inside of a map. The seed will be deserializing itself from
         // the key of the map.
-        let val = seed.deserialize(&mut *self.de)?;
+        //let val = seed.deserialize(&mut *self.de)?;
         // Parse the colon separating map key from value.
-        if self.de.next_char()? == ':' {
-            Ok((val, self))
-        } else {
-            Err(Error::ExpectedVariantColon)
-        }
+        //if self.de.next_char()? == ':' {
+            //Ok((val, self))
+        //} else {
+            //Err(Error::ExpectedVariantColon)
+        //}
+        unimplemented!("TODO");
     }
 }
 
@@ -613,7 +614,8 @@ impl<'de, 'a, 'b> VariantAccess<'de> for Enum<'a, 'de, 'b> {
     // If the `Visitor` expected this variant to be a unit variant, the input
     // should have been the plain string case handled in `deserialize_enum`.
     fn unit_variant(self) -> Result<()> {
-        Err(Error::ExpectedString)
+        //Err(Error::ExpectedString)
+        unimplemented!("TODO");
     }
 
     // Newtype variants are represented in JSON as `{ NAME: VALUE }` so
@@ -622,7 +624,8 @@ impl<'de, 'a, 'b> VariantAccess<'de> for Enum<'a, 'de, 'b> {
     where
         T: DeserializeSeed<'de>,
     {
-        seed.deserialize(self.de)
+        //seed.deserialize(self.de)
+        unimplemented!("TODO");
     }
 
     // Tuple variants are represented in JSON as `{ NAME: [DATA...] }` so
@@ -631,7 +634,8 @@ impl<'de, 'a, 'b> VariantAccess<'de> for Enum<'a, 'de, 'b> {
     where
         V: Visitor<'de>,
     {
-        de::Deserializer::deserialize_seq(self.de, visitor)
+        //de::Deserializer::deserialize_seq(self.de, visitor)
+        unimplemented!("TODO");
     }
 
     // Struct variants are represented in JSON as `{ NAME: { K: V, ... } }` so
@@ -644,7 +648,8 @@ impl<'de, 'a, 'b> VariantAccess<'de> for Enum<'a, 'de, 'b> {
     where
         V: Visitor<'de>,
     {
-        de::Deserializer::deserialize_map(self.de, visitor)
+        //de::Deserializer::deserialize_map(self.de, visitor)
+        unimplemented!("TODO");
     }
 }
 
@@ -746,6 +751,21 @@ mod tests {
                 0x0C, 0x00, 0x00, 0x00, 0x00, 0x00, 0x29, 0x40, 0x00, 0x00, 0x00, 0x00,
                 0x07, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x62, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 
                 0x0C, 0x00, 0x00, 0x00, 0x66, 0x06, 0x59, 0x40, 0x66, 0x66, 0x66, 0x66]
+        ).unwrap());
+
+
+        #[derive(Deserialize, std::cmp::PartialEq, Debug)]
+        struct WhatNot { a: f64, b: String }
+        let wtf = WhatNot { a: 12.5, b: String::from("sdf") };
+
+        // rust-redbin-helper ["a" 12.5 "b" "sdf"]
+        assert_eq!(wtf, from_bytes(
+            &[0x52, 0x45, 0x44, 0x42, 0x49, 0x4E, 0x02, 0x00, 0x01, 0x00, 0x00, 0x00, 0x50, 0x00, 0x00, 0x00,
+            0x05, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x04, 0x00, 0x00, 0x00,
+                0x07, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x61, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 
+                0x0C, 0x00, 0x00, 0x00, 0x00, 0x00, 0x29, 0x40, 0x00, 0x00, 0x00, 0x00,
+                0x07, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x62, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 
+                0x07, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x03, 0x00, 0x00, 0x00, 0x73, 0x64, 0x66, 0x00]
         ).unwrap());
 
     }
