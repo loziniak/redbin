@@ -15,6 +15,7 @@ mod types {
     pub const NONE: u8 = 0x03;
     pub const LOGIC: u8 = 0x04;
     pub const BLOCK: u8 = 0x05;
+    pub const PAREN: u8 = 0x06;
     pub const STRING: u8 = 0x07;
     pub const CHAR: u8 = 0x0A;
     pub const INTEGER: u8 = 0x0B;
@@ -82,15 +83,23 @@ impl<'de, 'b> Deserializer<'de, 'b> {
         }
     }
     
-    fn parse_block_header(&mut self) -> Result<i32> {
+    fn parse_any_block_header(&mut self, record_type: u8) -> Result<i32> {
         self.parse_padding()?;
-        if &self.input[..4] == &[types::BLOCK, 0x00, 0x00, 0x00] {
+        if &self.input[..4] == &[record_type, 0x00, 0x00, 0x00] {
             let len = &self.input[8..12];
             self.input = &self.input[12..];
             Ok(i32::from_le_bytes(len.try_into().unwrap()))
         } else {
             Err(Error::ExpectedBlock)
         }
+    }
+
+    fn parse_block_header(&mut self) -> Result<i32> {
+        self.parse_any_block_header(types::BLOCK)
+    }
+
+    fn parse_paren_header(&mut self) -> Result<i32> {
+        self.parse_any_block_header(types::PAREN)
     }
 
     fn parse_logic(&mut self) -> Result<bool> {
@@ -467,7 +476,15 @@ impl<'de, 'a, 'b> de::Deserializer<'de> for &'a mut Deserializer<'de, 'b> {
     where
         V: Visitor<'de>,
     {
-        unimplemented!("TODO");
+        let len = self.parse_paren_header()?;
+        if len == 1 {
+            visitor.visit_enum(self.parse_string()?.into_deserializer())
+        } else if len == 2 {
+            let value = visitor.visit_enum(Enum::new(self))?;
+            Ok(value)
+        } else {
+            Err(Error::ExpectedEnum)
+        }
     }
 
     fn deserialize_identifier<V>(self, visitor: V) -> Result<V::Value>
@@ -575,17 +592,8 @@ impl<'de, 'a, 'b> EnumAccess<'de> for Enum<'a, 'de, 'b> {
     where
         V: DeserializeSeed<'de>,
     {
-        // The `deserialize_enum` method parsed a `{` character so we are
-        // currently inside of a map. The seed will be deserializing itself from
-        // the key of the map.
-        //let val = seed.deserialize(&mut *self.de)?;
-        // Parse the colon separating map key from value.
-        //if self.de.next_char()? == ':' {
-            //Ok((val, self))
-        //} else {
-            //Err(Error::ExpectedVariantColon)
-        //}
-        unimplemented!("TODO");
+        let val = seed.deserialize(&mut *self.de)?;
+        Ok((val, self))
     }
 }
 
@@ -597,32 +605,23 @@ impl<'de, 'a, 'b> VariantAccess<'de> for Enum<'a, 'de, 'b> {
     // If the `Visitor` expected this variant to be a unit variant, the input
     // should have been the plain string case handled in `deserialize_enum`.
     fn unit_variant(self) -> Result<()> {
-        //Err(Error::ExpectedString)
-        unimplemented!("TODO");
+        Err(Error::ExpectedString)
     }
 
-    // Newtype variants are represented in JSON as `{ NAME: VALUE }` so
-    // deserialize the value here.
     fn newtype_variant_seed<T>(self, seed: T) -> Result<T::Value>
     where
         T: DeserializeSeed<'de>,
     {
-        //seed.deserialize(self.de)
-        unimplemented!("TODO");
+        seed.deserialize(self.de)
     }
 
-    // Tuple variants are represented in JSON as `{ NAME: [DATA...] }` so
-    // deserialize the sequence of data here.
     fn tuple_variant<V>(self, _len: usize, visitor: V) -> Result<V::Value>
     where
         V: Visitor<'de>,
     {
-        //de::Deserializer::deserialize_seq(self.de, visitor)
-        unimplemented!("TODO");
+        de::Deserializer::deserialize_tuple(self.de, _len, visitor)
     }
 
-    // Struct variants are represented in JSON as `{ NAME: { K: V, ... } }` so
-    // deserialize the inner map here.
     fn struct_variant<V>(
         self,
         _fields: &'static [&'static str],
@@ -631,8 +630,7 @@ impl<'de, 'a, 'b> VariantAccess<'de> for Enum<'a, 'de, 'b> {
     where
         V: Visitor<'de>,
     {
-        //de::Deserializer::deserialize_map(self.de, visitor)
-        unimplemented!("TODO");
+        de::Deserializer::deserialize_struct(self.de, "NameIsIrrelevant", _fields, visitor)
     }
 }
 
@@ -751,6 +749,36 @@ mod tests {
                 0x07, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x03, 0x00, 0x00, 0x00, 0x73, 0x64, 0x66, 0x00]
         ).unwrap());
 
+
+        #[derive(Deserialize, std::cmp::PartialEq, Debug)]
+        enum E {
+            Unit,
+            Newtype(u32),
+            Tuple(u32, u32),
+            Struct { a: u32 },
+        }
+        let enum_test_tuple = (E::Unit, E::Newtype(1), E::Tuple(1, 2), E::Struct { a: 1 });
+
+        // rust-redbin-helper [ ("Unit") ("Newtype" 1) ("Tuple" [1 2]) ("Struct" ["a" 1]) ]
+        assert_eq!(enum_test_tuple, from_bytes(
+            &[0x52, 0x45, 0x44, 0x42, 0x49, 0x4E, 0x02, 0x00, 0x01, 0x00, 0x00, 0x00, 0xD0, 0x00, 0x00, 0x00,
+            0x05, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x04, 0x00, 0x00, 0x00,
+                0x06, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00,
+                    0x07, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x04, 0x00, 0x00, 0x00, 0x55, 0x6E, 0x69, 0x74,
+                0x06, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00,
+                    0x07, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x07, 0x00, 0x00, 0x00, 0x4E, 0x65, 0x77, 0x74, 0x79, 0x70, 0x65, 0x00,
+                    0x0B, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00,
+                0x06, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00,
+                    0x07, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x05, 0x00, 0x00, 0x00, 0x54, 0x75, 0x70, 0x6C, 0x65, 0x00, 0x00, 0x00,
+                    0x05, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00,
+                        0x0B, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00,
+                        0x0B, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00,
+                0x06, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00,
+                    0x07, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x06, 0x00, 0x00, 0x00, 0x53, 0x74, 0x72, 0x75, 0x63, 0x74, 0x00, 0x00,
+                    0x05, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00,
+                        0x07, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x61, 0x00, 0x00, 0x00,
+                        0x0B, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00]
+        ).unwrap());
     }
 
 }

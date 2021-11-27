@@ -10,6 +10,7 @@ mod types {
     pub const NONE: i32 = 0x03_i32;
     pub const LOGIC: i32 = 0x04_i32;
     pub const BLOCK: i32 = 0x05_i32;
+    pub const PAREN: i32 = 0x06_i32;
     pub const STRING: i32 = 0x07_i32;
     pub const CHAR: i32 = 0x0A_i32;
     pub const INTEGER: i32 = 0x0B_i32;
@@ -32,13 +33,24 @@ impl<'b> Serializer<'b> {
         }
     }
 
+    fn append_any_block_header(vec: &mut Vec<u8>, length: i32, paren: bool) -> () {
+        let t = if paren {types::PAREN} else {types::BLOCK};
+        vec.append(&mut Vec::from(t.to_le_bytes()));
+        vec.append(&mut Vec::from([0x00, 0x00, 0x00, 0x00])); // position block on start
+        vec.append(&mut Vec::from(length.to_le_bytes()));
+    }
+
     fn block_header_with(&mut self, len: usize) -> () {
-        self.output.append(&mut Vec::from(types::BLOCK.to_le_bytes()));
-        self.output.append(&mut Vec::from([0x00, 0x00, 0x00, 0x00])); // position block on start
-        self.output.append(&mut Vec::from((len as i32).to_le_bytes()));
+        Self::append_any_block_header(&mut self.output, len as i32, false);
         self.length = len as i32;
     }
-    
+
+    fn variant_header(&mut self, with_value: bool) -> () {
+        let length = if with_value {2} else {1};
+        Self::append_any_block_header(&mut self.output, length, true);
+        self.length = length;
+    }
+
     fn elements<T>(&mut self, value: &T) -> Result<()>
     where
         T: ?Sized + Serialize,
@@ -48,14 +60,10 @@ impl<'b> Serializer<'b> {
         self.output.append(&mut serializer.output);
         Ok(())
     }
-    
-    fn block_header(&mut self) -> () {
-        let mut header = Vec::new();
-        
-        header.append(&mut Vec::from(types::BLOCK.to_le_bytes()));
-        header.append(&mut Vec::from([0x00, 0x00, 0x00, 0x00])); // position block on start
-        header.append(&mut Vec::from(self.length.to_le_bytes()));
 
+    fn prepend_block_header(&mut self) -> () {
+        let mut header = Vec::new();
+        Self::append_any_block_header(&mut header, self.length, false);
         self.output.splice(0..0, header);
     }
 }
@@ -241,7 +249,8 @@ impl<'a> ser::Serializer for &'a mut Serializer<'_> {
         _variant_index: u32,
         variant: &'static str,
     ) -> Result<()> {
-        unimplemented!("TODO");
+        self.variant_header(false);
+        self.serialize_str(variant)
     }
 
     fn serialize_newtype_struct<T>(
@@ -265,10 +274,13 @@ impl<'a> ser::Serializer for &'a mut Serializer<'_> {
     where
         T: ?Sized + Serialize,
     {
-        unimplemented!("TODO");
+        self.variant_header(true);
+        self.serialize_str(variant)?;
+        value.serialize(self)?;
+        Ok(())
     }
 
-    fn serialize_seq(self, _len: Option<usize>) -> Result<Self::SerializeSeq> {
+    fn serialize_seq(self, len: Option<usize>) -> Result<Self::SerializeSeq> {
         Ok(self)
     }
 
@@ -291,12 +303,15 @@ impl<'a> ser::Serializer for &'a mut Serializer<'_> {
         _name: &'static str,
         _variant_index: u32,
         variant: &'static str,
-        _len: usize,
+        len: usize,
     ) -> Result<Self::SerializeTupleVariant> {
-        unimplemented!("TODO");
+        self.variant_header(true);
+        self.serialize_str(variant)?;
+        self.block_header_with(len);
+        Ok(self)
     }
 
-    fn serialize_map(self, _len: Option<usize>) -> Result<Self::SerializeMap> {
+    fn serialize_map(self, len: Option<usize>) -> Result<Self::SerializeMap> {
         Ok(self)
     }
 
@@ -314,9 +329,12 @@ impl<'a> ser::Serializer for &'a mut Serializer<'_> {
         _name: &'static str,
         _variant_index: u32,
         variant: &'static str,
-        _len: usize,
+        len: usize,
     ) -> Result<Self::SerializeStructVariant> {
-        unimplemented!("TODO");
+        self.variant_header(true);
+        self.serialize_str(variant)?;
+        self.block_header_with(len * 2);
+        Ok(self)
     }
 }
 
@@ -334,7 +352,7 @@ impl<'a> ser::SerializeSeq for &'a mut Serializer<'_> {
     }
 
     fn end(self) -> Result<()> {
-        self.block_header();
+        self.prepend_block_header();
         Ok(())
     }
 }
@@ -381,11 +399,12 @@ impl<'a> ser::SerializeTupleVariant for &'a mut Serializer<'_> {
     where
         T: ?Sized + Serialize,
     {
-        unimplemented!("TODO");
+        self.elements(value)?;
+        Ok(())
     }
 
     fn end(self) -> Result<()> {
-        unimplemented!("TODO");
+        Ok(())
     }
 }
 
@@ -412,7 +431,7 @@ impl<'a> ser::SerializeMap for &'a mut Serializer<'_> {
     }
 
     fn end(self) -> Result<()> {
-        self.block_header();
+        self.prepend_block_header();
         Ok(())
     }
 }
@@ -443,11 +462,13 @@ impl<'a> ser::SerializeStructVariant for &'a mut Serializer<'_> {
     where
         T: ?Sized + Serialize,
     {
-        unimplemented!("TODO");
+        self.elements(key)?;
+        self.elements(value)?;
+        Ok(())
     }
 
     fn end(self) -> Result<()> {
-        unimplemented!("TODO");
+        Ok(())
     }
 }
 
@@ -568,6 +589,36 @@ mod tests {
                 0x0C, 0x00, 0x00, 0x00, 0x00, 0x00, 0x29, 0x40, 0x00, 0x00, 0x00, 0x00,
                 0x07, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x62, 0x00, 0x00, 0x00, 
                 0x07, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x03, 0x00, 0x00, 0x00, 0x73, 0x64, 0x66, 0x00]);
+
+
+        #[derive(Serialize, std::cmp::PartialEq, Debug)]
+        enum E {
+            Unit,
+            Newtype(u32),
+            Tuple(u32, u32),
+            Struct { a: u32 },
+        }
+        let enum_test_tuple = (E::Unit, E::Newtype(1), E::Tuple(1, 2), E::Struct { a: 1 });
+
+        // rust-redbin-helper [ ("Unit") ("Newtype" 1) ("Tuple" [1 2]) ("Struct" ["a" 1]) ]
+        assert_eq!(to_bytes(&enum_test_tuple).unwrap(),
+            &[0x52, 0x45, 0x44, 0x42, 0x49, 0x4E, 0x02, 0x00, 0x01, 0x00, 0x00, 0x00, 0xD0, 0x00, 0x00, 0x00,
+            0x05, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x04, 0x00, 0x00, 0x00,
+                0x06, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00,
+                    0x07, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x04, 0x00, 0x00, 0x00, 0x55, 0x6E, 0x69, 0x74,
+                0x06, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00,
+                    0x07, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x07, 0x00, 0x00, 0x00, 0x4E, 0x65, 0x77, 0x74, 0x79, 0x70, 0x65, 0x00,
+                    0x0B, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00,
+                0x06, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00,
+                    0x07, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x05, 0x00, 0x00, 0x00, 0x54, 0x75, 0x70, 0x6C, 0x65, 0x00, 0x00, 0x00,
+                    0x05, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00,
+                        0x0B, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00,
+                        0x0B, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00,
+                0x06, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00,
+                    0x07, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x06, 0x00, 0x00, 0x00, 0x53, 0x74, 0x72, 0x75, 0x63, 0x74, 0x00, 0x00,
+                    0x05, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00,
+                        0x07, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x61, 0x00, 0x00, 0x00,
+                        0x0B, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00]);
 
     }
 
