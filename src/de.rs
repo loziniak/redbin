@@ -1,15 +1,12 @@
-#![allow(unused_imports)]
-#![allow(unused_variables)]
-#![allow(dead_code)]
-
 use crate::error::{Error, Result};
 use serde::de::{
     self, Deserialize, DeserializeSeed, EnumAccess, IntoDeserializer,
     MapAccess, SeqAccess, VariantAccess, Visitor,
 };
-use std::ops::{AddAssign, MulAssign, Neg};
 use std::convert::TryInto;
-use crate::iconv_tools::Ic;
+use iconv::{Iconv, IconvError};
+use crate::iconv_tools::iconv;
+
 
 mod types {
     pub const NONE: u8 = 0x03;
@@ -23,24 +20,32 @@ mod types {
     pub const BINARY: u8 = 0x29;
 }
 
-pub struct Deserializer<'de, 'b> {
+pub struct Deserializer<'de> {
     input: &'de [u8],
-    ic: &'b mut Ic,
+	ucs4_decoder: Iconv,
+	ucs2_decoder: Iconv,
 }
 
-impl<'de, 'b> Deserializer<'de, 'b> {
-    #[allow(clippy::should_implement_trait)]
-    pub fn from_bytes(input: &'de [u8], ic: &'b mut Ic) -> Self {
-        Deserializer { input, ic }
+impl<'de> Deserializer<'de> {
+    pub fn from_bytes(input: &'de [u8]) -> Self {
+        Deserializer {
+            input,
+			ucs4_decoder: decoder("UCS-4LE").unwrap(),
+			ucs2_decoder: decoder("UCS-2LE").unwrap(),
+        }
     }
 }
 
-pub fn from_bytes<'a, T>(s: &'a [u8]) -> Result<T>
+fn decoder(from_encoding: &str) -> std::result::Result<Iconv, IconvError> {
+	Iconv::new(from_encoding, "UTF-8")
+}
+
+
+pub fn from_bytes<'de, T>(s: &'de [u8]) -> Result<T>
 where
-    T: Deserialize<'a>,
+    T: Deserialize<'de>,
 {
-    let mut ic = Ic::new();
-    let mut deserializer = Deserializer::from_bytes(s, &mut ic);
+    let mut deserializer = Deserializer::from_bytes(s);
     deserializer.parse_header()?;
     let t = T::deserialize(&mut deserializer)?;
     if deserializer.input.is_empty() {
@@ -51,7 +56,7 @@ where
 }
 
 
-impl<'de, 'b> Deserializer<'de, 'b> {
+impl<'de> Deserializer<'de> {
 
     fn parse_padding(&mut self) -> Result<()> {
         while self.input.len() > 0 && self.input[0] == 0x00 {
@@ -124,7 +129,12 @@ impl<'de, 'b> Deserializer<'de, 'b> {
         }
     }
 
-    fn parse_string(&mut self) -> Result<String> {
+    fn parse_s<S, F1, F2, F4>(&mut self, f1: F1, f2: F2, f4: F4) -> Result<S>
+    where
+        F1: FnOnce(&'de [u8], &mut Deserializer<'de>) -> Result<S>,
+        F2: FnOnce(&'de [u8], &mut Deserializer<'de>) -> Result<S>,
+        F4: FnOnce(&'de [u8], &mut Deserializer<'de>) -> Result<S>,
+    {
         self.parse_padding()?;
         if self.input[0] == types::STRING {
             let unit: usize = self.input[1] as usize;
@@ -143,20 +153,37 @@ impl<'de, 'b> Deserializer<'de, 'b> {
                 self.parse_padding()?;
                 
                 if unit == 1 {
-                    String::from_utf8(bytes.to_vec())
-                        .map_err(|e| Error::Message(e.to_string()))
+                    f1(bytes, self)
                 } else {
                     if unit == 2 {
-                        self.ic.ucs2_decode(bytes)
+                        f2(bytes, self)
                     } else {
-                        self.ic.ucs4_decode(bytes)
+                        f4(bytes, self)
                     }
-                        .map_err(|e| Error::Message(e.to_string()))
                 }
             }
         } else {
             Err(Error::ExpectedString)
         }
+    }
+
+    #[allow(unused)]
+    fn parse_str(&mut self) -> Result<&'de str> {
+        self.parse_s(
+            |bytes, de| std::str::from_utf8(bytes).map_err(|e| Error::Message(e.to_string())),
+            |bytes, de| Err(Error::Message(String::from(
+                "Deserialization into &str possible only for ASCII (unit=1) Redbin strings."))),
+            |bytes, de| Err(Error::Message(String::from(
+                "Deserialization into &str possible only for ASCII (unit=1) Redbin strings."))),
+        )
+    }
+
+    fn parse_string(&mut self) -> Result<String> {
+        self.parse_s(
+            |bytes, _de| String::from_utf8(bytes.to_vec()).map_err(|e| Error::Message(e.to_string())),
+            |bytes, de| de.ucs2_decode(bytes).map_err(|e| Error::Message(e.to_string())),
+            |bytes, de| de.ucs4_decode(bytes).map_err(|e| Error::Message(e.to_string()))
+        )
     }
     
     fn parse_char(&mut self) -> Result<char> {
@@ -164,7 +191,7 @@ impl<'de, 'b> Deserializer<'de, 'b> {
         if self.input[0] == types::CHAR {
             let bytes = &self.input[4..8];
             self.input = &self.input[8..];
-            self.ic.ucs4_decode(bytes)
+            self.ucs4_decode(bytes)
                 .map(|v| v.chars().next().unwrap())
                 .map_err(|e| Error::Message(e.to_string()))
         } else {
@@ -172,7 +199,7 @@ impl<'de, 'b> Deserializer<'de, 'b> {
         }
     }
 
-    fn parse_binary(&mut self) -> Result<Vec<u8>> {
+    fn parse_binary(&mut self) -> Result<&'de [u8]> {
         self.parse_padding()?;
         if self.input[0] == types::BINARY {
             let unit: usize = self.input[1] as usize;
@@ -191,7 +218,7 @@ impl<'de, 'b> Deserializer<'de, 'b> {
                 self.parse_padding()?;
                 
                 if unit == 1 {
-                    Ok(bytes.to_vec())
+                    Ok(bytes)
                 } else {
                     unimplemented!("Unexpected unit size <> 1.");
                 }
@@ -199,6 +226,10 @@ impl<'de, 'b> Deserializer<'de, 'b> {
         } else {
             Err(Error::ExpectedBinary)
         }
+    }
+
+    fn parse_binary_owned(&mut self) -> Result<Vec<u8>> {
+        self.parse_binary().map(|bytes| bytes.to_vec())
     }
     
     fn parse_none(&mut self) -> Result<()> {
@@ -211,15 +242,29 @@ impl<'de, 'b> Deserializer<'de, 'b> {
         }
     }
 
+	fn ucs4_decode(&mut self, input: &[u8]) -> std::result::Result<String, IconvError> {
+		decode(&mut self.ucs4_decoder, input)
+	}
+	
+	fn ucs2_decode(&mut self, input: &[u8]) -> std::result::Result<String, IconvError> {
+		decode(&mut self.ucs2_decoder, input)
+	}
 }
 
-impl<'de, 'a, 'b> de::Deserializer<'de> for &'a mut Deserializer<'de, 'b> {
+
+/// convert `input` from `encoding` to UTF-8
+fn decode(c: &mut Iconv, input: &[u8]) -> std::result::Result<String, IconvError> {
+	iconv(c, input).map(|v| unsafe { String::from_utf8_unchecked(v) })
+}
+
+
+impl<'de, 'a> de::Deserializer<'de> for &'a mut Deserializer<'de> {
     type Error = Error;
 
     // Look at the input data to decide what Serde data model type to
     // deserialize as. Not all data formats are able to support this operation.
     // Formats that support `deserialize_any` are known as self-describing.
-    fn deserialize_any<V>(self, visitor: V) -> Result<V::Value>
+    fn deserialize_any<V>(self, _visitor: V) -> Result<V::Value>
     where
         V: Visitor<'de>,
     {
@@ -348,7 +393,7 @@ impl<'de, 'a, 'b> de::Deserializer<'de> for &'a mut Deserializer<'de, 'b> {
     where
         V: Visitor<'de>,
     {
-        unimplemented!("Can only deserialize String.");
+        visitor.visit_borrowed_str(self.parse_str()?)
     }
 
     fn deserialize_string<V>(self, visitor: V) -> Result<V::Value>
@@ -358,18 +403,19 @@ impl<'de, 'a, 'b> de::Deserializer<'de> for &'a mut Deserializer<'de, 'b> {
         visitor.visit_string(self.parse_string()?)
     }
 
+    #[allow(unused)]
     fn deserialize_bytes<V>(self, visitor: V) -> Result<V::Value>
     where
         V: Visitor<'de>,
     {
-        unimplemented!("Can only deserialize Vec<u8>.");
+        visitor.visit_borrowed_bytes(self.parse_binary()?)
     }
 
     fn deserialize_byte_buf<V>(self, visitor: V) -> Result<V::Value>
     where
         V: Visitor<'de>,
     {
-        visitor.visit_byte_buf(self.parse_binary()?)
+        visitor.visit_byte_buf(self.parse_binary_owned()?)
     }
 
     fn deserialize_option<V>(self, visitor: V) -> Result<V::Value>
@@ -494,6 +540,7 @@ impl<'de, 'a, 'b> de::Deserializer<'de> for &'a mut Deserializer<'de, 'b> {
         self.deserialize_string(visitor)
     }
 
+    #[allow(unused)]
     fn deserialize_ignored_any<V>(self, visitor: V) -> Result<V::Value>
     where
         V: Visitor<'de>,
@@ -505,20 +552,20 @@ impl<'de, 'a, 'b> de::Deserializer<'de> for &'a mut Deserializer<'de, 'b> {
 // In order to handle commas correctly when deserializing a JSON array or map,
 // we need to track whether we are on the first element or past the first
 // element.
-struct BlockData<'a, 'de: 'a, 'b> {
-    de: &'a mut Deserializer<'de, 'b>,
+struct BlockData<'a, 'de> {
+    de: &'a mut Deserializer<'de>,
     elements: i32,
 }
 
-impl<'a, 'de, 'b> BlockData<'a, 'de, 'b> {
-    fn new(de: &'a mut Deserializer<'de, 'b>, len: i32) -> Self {
+impl<'a, 'de> BlockData<'a, 'de> {
+    fn new(de: &'a mut Deserializer<'de>, len: i32) -> Self {
         BlockData { de, elements: len }
     }
 }
 
 // `SeqAccess` is provided to the `Visitor` to give it the ability to iterate
 // through elements of the sequence.
-impl<'de, 'a, 'b> SeqAccess<'de> for BlockData<'a, 'de, 'b> {
+impl<'de, 'a> SeqAccess<'de> for BlockData<'a, 'de> {
     type Error = Error;
 
     fn next_element_seed<T>(&mut self, seed: T) -> Result<Option<T::Value>>
@@ -541,7 +588,7 @@ impl<'de, 'a, 'b> SeqAccess<'de> for BlockData<'a, 'de, 'b> {
 
 // `MapAccess` is provided to the `Visitor` to give it the ability to iterate
 // through entries of the map.
-impl<'de, 'a, 'b> MapAccess<'de> for BlockData<'a, 'de, 'b> {
+impl<'de, 'a> MapAccess<'de> for BlockData<'a, 'de> {
     type Error = Error;
 
     fn next_key_seed<K>(&mut self, seed: K) -> Result<Option<K::Value>>
@@ -569,12 +616,12 @@ impl<'de, 'a, 'b> MapAccess<'de> for BlockData<'a, 'de, 'b> {
     }
 }
 
-struct Enum<'a, 'de: 'a, 'b> {
-    de: &'a mut Deserializer<'de, 'b>,
+struct Enum<'a, 'de> {
+    de: &'a mut Deserializer<'de>,
 }
 
-impl<'a, 'de, 'b> Enum<'a, 'de, 'b> {
-    fn new(de: &'a mut Deserializer<'de, 'b>) -> Self {
+impl<'a, 'de> Enum<'a, 'de> {
+    fn new(de: &'a mut Deserializer<'de>) -> Self {
         Enum { de }
     }
 }
@@ -584,7 +631,7 @@ impl<'a, 'de, 'b> Enum<'a, 'de, 'b> {
 //
 // Note that all enum deserialization methods in Serde refer exclusively to the
 // "externally tagged" enum representation.
-impl<'de, 'a, 'b> EnumAccess<'de> for Enum<'a, 'de, 'b> {
+impl<'de, 'a> EnumAccess<'de> for Enum<'a, 'de> {
     type Error = Error;
     type Variant = Self;
 
@@ -599,7 +646,7 @@ impl<'de, 'a, 'b> EnumAccess<'de> for Enum<'a, 'de, 'b> {
 
 // `VariantAccess` is provided to the `Visitor` to give it the ability to see
 // the content of the single variant that it decided to deserialize.
-impl<'de, 'a, 'b> VariantAccess<'de> for Enum<'a, 'de, 'b> {
+impl<'de, 'a> VariantAccess<'de> for Enum<'a, 'de> {
     type Error = Error;
 
     // If the `Visitor` expected this variant to be a unit variant, the input
@@ -636,14 +683,25 @@ impl<'de, 'a, 'b> VariantAccess<'de> for Enum<'a, 'de, 'b> {
 
 ////////////////////////////////////////////////////////////////////////////////
 
+/*
+Redbin values can be generated in Red:
+
+>> rust-redbin-helper: function [value] [buf: copy #{}  save/as buf value 'redbin  foreach b buf [prin rejoin [", 0x"   copy/part  at mold to binary! b 9  2]]  print ""]
+== func [value /local buf b][buf: copy #{} save/as buf value 'redbin foreach b buf [prin re...
+>> rust-redbin-helper 55
+, 0x52, 0x45, 0x44, 0x42, 0x49, 0x4E, 0x02, 0x00, 0x01, 0x00, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00, 0x0B, 0x00, 0x00, 0x00, 0x37, 0x00, 0x00, 0x00
+*/
+
 #[cfg(test)]
 mod tests {
     use super::from_bytes;
     use serde_derive::Deserialize;
     use serde_bytes::ByteBuf;
+    use std::path::Path;
 
     #[test]
     fn test_seq() {
+
         // rust-redbin-helper reduce [-2 299 66666 [5 6] yes 122234.23425 12.5 "aa" "ą" "💖" #"a" #{CAFE}]
         let j = &[0x52, 0x45, 0x44, 0x42, 0x49, 0x4E, 0x02, 0x00, 0x01, 0x00, 0x00, 0x00, 0xAC, 0x00, 0x00, 0x00, 
             0x05, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x0C, 0x00, 0x00, 0x00,
@@ -661,10 +719,11 @@ mod tests {
                 0x07, 0x04, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x96, 0xF4, 0x01, 0x00,
                 0x0A, 0x00, 0x00, 0x00, 0x61, 0x00, 0x00, 0x00,
                 0x29, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0xCA, 0xFE, 0x00, 0x00];
-        let expected: (i8, i16, u32, Vec<i16>, bool, f64, f32, String, String, String, char, ByteBuf)
-            = (-2, 299, 66666, vec![5, 6], true, 122234.23425, 12.5, String::from("aa"), String::from("ą"), String::from("💖"), 'a', ByteBuf::from([0xCA, 0xFE]));
+        let expected: (i8, i16, u32, Vec<i16>, bool, f64, f32, &str, String, String, char, ByteBuf)
+            = (-2, 299, 66666, vec![5, 6], true, 122234.23425, 12.5, "aa", String::from("ą"), String::from("💖"), 'a', ByteBuf::from([0xCA, 0xFE]));
         assert_eq!(expected, from_bytes(j).unwrap());
-        
+
+
         // rust-redbin-helper none
         assert_eq!((), from_bytes::<()>(
             &[0x52, 0x45, 0x44, 0x42, 0x49, 0x4E, 0x02, 0x00, 0x01, 0x00, 0x00, 0x00, 0x04, 0x00, 0x00, 0x00,
@@ -751,13 +810,13 @@ mod tests {
 
 
         #[derive(Deserialize, std::cmp::PartialEq, Debug)]
-        enum E {
+        enum En {
             Unit,
             Newtype(u32),
             Tuple(u32, u32),
             Struct { a: u32 },
         }
-        let enum_test_tuple = (E::Unit, E::Newtype(1), E::Tuple(1, 2), E::Struct { a: 1 });
+        let enum_test_tuple = (En::Unit, En::Newtype(1), En::Tuple(1, 2), En::Struct { a: 1 });
 
         // rust-redbin-helper [ ("Unit") ("Newtype" 1) ("Tuple" [1 2]) ("Struct" ["a" 1]) ]
         assert_eq!(enum_test_tuple, from_bytes(
@@ -779,6 +838,26 @@ mod tests {
                         0x07, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x61, 0x00, 0x00, 0x00,
                         0x0B, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00]
         ).unwrap());
+
+        // rust-redbin-helper "ab"
+        assert_eq!("ab", from_bytes::<&str>(
+            &[0x52, 0x45, 0x44, 0x42, 0x49, 0x4E, 0x02, 0x00, 0x01, 0x00, 0x00, 0x00, 0x10, 0x00, 0x00, 0x00,
+            0x07, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0x61, 0x62, 0x00, 0x00]
+        ).unwrap());
+        
+        // rust-redbin-helper #{CAFE}
+        assert_eq!(&[0xCA, 0xFE], from_bytes::<&[u8]>(
+            &[0x52, 0x45, 0x44, 0x42, 0x49, 0x4E, 0x02, 0x00, 0x01, 0x00, 0x00, 0x00, 0x10, 0x00, 0x00, 0x00,
+            0x29, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0xCA, 0xFE, 0x00, 0x00]
+        ).unwrap());
+
+        // rust-redbin-helper "a"
+        let path: Option<&Path> = Some(Path::new("a"));
+        assert_eq!(path, from_bytes(
+            &[0x52, 0x45, 0x44, 0x42, 0x49, 0x4E, 0x02, 0x00, 0x01, 0x00, 0x00, 0x00, 0x10, 0x00, 0x00, 0x00, 
+            0x07, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x61, 0x00, 0x00, 0x00]
+        ).unwrap());
+
     }
 
 }
