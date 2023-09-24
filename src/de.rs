@@ -360,12 +360,8 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut Deserializer<'de> {
     where
         V: Visitor<'de>,
     {
-        let v = self.parse_integer()?;
-        if v < (u64::MIN as i32) {
-            Err(Error::Message(String::from("u64 limit exceeded")))
-        } else {
-            visitor.visit_u64(v as u64)
-        }
+        let bytes = self.parse_binary()?;
+        visitor.visit_u64(u64::from_le_bytes(bytes.try_into().unwrap()))
     }
 
     fn deserialize_f32<V>(self, visitor: V) -> Result<V::Value>
@@ -721,6 +717,14 @@ mod tests {
                 0x29, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0xCA, 0xFE, 0x00, 0x00];
         let expected: (i8, i16, u32, Vec<i16>, bool, f64, f32, &str, String, String, char, ByteBuf)
             = (-2, 299, 66666, vec![5, 6], true, 122234.23425, 12.5, "aa", String::from("ą"), String::from("💖"), 'a', ByteBuf::from([0xCA, 0xFE]));
+        assert_eq!(expected, from_bytes(j).unwrap());
+
+        // rust-redbin-helper [66666 #{FEFFFFFF FFFFFFFF}]
+        let j = &[0x52, 0x45, 0x44, 0x42, 0x49, 0x4E, 0x02, 0x00, 0x01, 0x00, 0x00, 0x00, 0x28, 0x00, 0x00, 0x00, 
+            0x05, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00,
+                0x0B, 0x00, 0x00, 0x00, 0x6A, 0x04, 0x01, 0x00,
+                0x29, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00, 0xFE, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF];
+        let expected: (u32, u64) = (66666, 18_446_744_073_709_551_614u64);
         assert_eq!(expected, from_bytes(j).unwrap());
 
 

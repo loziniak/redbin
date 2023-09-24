@@ -131,7 +131,7 @@ impl<'a> ser::Serializer for &'a mut Serializer {
     fn serialize_i64(self, v: i64) -> Result<()> {
         if v > (i32::MAX as i64)
                 || v < (i32::MIN as i64) {
-            Err(Error::Message(String::from("32-bit integer! limit exceeded")))
+            Err(Error::Message(String::from("32-bit signed integer! limit exceeded")))
         } else {
             self.serialize_i32(v as i32)
         }
@@ -146,15 +146,15 @@ impl<'a> ser::Serializer for &'a mut Serializer {
     }
 
     fn serialize_u32(self, v: u32) -> Result<()> {
-        self.serialize_u64(v as u64)
-    }
-
-    fn serialize_u64(self, v: u64) -> Result<()> {
-        if v > (i32::MAX as u64) {
-            Err(Error::Message(String::from("32-bit integer! limit exceeded")))
+        if v > (i32::MAX as u32) {
+            Err(Error::Message(String::from("32-bit signed integer! limit exceeded")))
         } else {
             self.serialize_i32(v as i32)
         }
+    }
+
+    fn serialize_u64(self, v: u64) -> Result<()> {
+        self.serialize_bytes(&v.to_le_bytes())
     }
 
     fn serialize_f32(self, v: f32) -> Result<()> {
@@ -500,14 +500,15 @@ mod tests {
     
     #[test]
     fn test_seq() {
-        let i: (i8, i16, u32, &[u8], bool, f64, f32, &str, &str, &str, char, char, ByteBuf) = (-2, 299, 66666, &[5, 6], true, 122234.23425, 12.5, "aa", "ą", "💖", 'a', '💖', ByteBuf::from([0xCA, 0xFE]));
+        let i: (i8, i16, u32, u64, &[u8], bool, f64, f32, &str, &str, &str, char, char, ByteBuf) = (-2i8, 299i16, 66666u32, 18_446_744_073_709_551_614u64, &[5, 6], true, 122234.23425, 12.5, "aa", "ą", "💖", 'a', '💖', ByteBuf::from([0xCA, 0xFE]));
         
-        // rust-redbin-helper reduce [-2 299 66666 [5 6] yes 122234.23425 12.5 "aa" "ą" "💖" #"a" #"💖" #{CAFE}]
-        let expected = &[0x52, 0x45, 0x44, 0x42, 0x49, 0x4E, 0x02, 0x00, 0x01, 0x00, 0x00, 0x00, 0xB0, 0x00, 0x00, 0x00, 
-        0x05, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x0D, 0x00, 0x00, 0x00, 
+        // rust-redbin-helper reduce [-2 299 66666 #{FEFFFFFF FFFFFFFF} [5 6] yes 122234.23425 12.5 "aa" "ą" "💖" #"a" #"💖" #{CAFE}]
+        let expected = &[0x52, 0x45, 0x44, 0x42, 0x49, 0x4E, 0x02, 0x00, 0x01, 0x00, 0x00, 0x00, 0xC4, 0x00, 0x00, 0x00, 
+        0x05, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x0E, 0x00, 0x00, 0x00, 
             0x0B, 0x00, 0x00, 0x00, 0xFE, 0xFF, 0xFF, 0xFF,
             0x0B, 0x00, 0x00, 0x00, 0x2B, 0x01, 0x00, 0x00,
             0x0B, 0x00, 0x00, 0x00, 0x6A, 0x04, 0x01, 0x00,
+            0x29, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00, 0xFE, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
             0x05, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00,
                 0x0B, 0x00, 0x00, 0x00, 0x05, 0x00, 0x00, 0x00,
                 0x0B, 0x00, 0x00, 0x00, 0x06, 0x00, 0x00, 0x00,
